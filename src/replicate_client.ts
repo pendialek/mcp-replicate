@@ -2,14 +2,15 @@
  * Replicate API client implementation.
  */
 
-import type { Model, ModelList } from "./models/model.js";
+import Replicate from "replicate";
+import type { Model, ModelList, ModelVersion } from "./models/model.js";
 import type {
   Prediction,
   PredictionInput,
   PredictionStatus,
   ModelIO,
 } from "./models/prediction.js";
-import type { Collection, CollectionList } from "./models/collection.ts";
+import type { Collection, CollectionList } from "./models/collection.js";
 
 // Constants
 const REPLICATE_API_BASE = "https://api.replicate.com/v1";
@@ -18,6 +19,45 @@ const MAX_RETRIES = 3;
 const MIN_RETRY_DELAY = 1000; // 1 second in milliseconds
 const MAX_RETRY_DELAY = 10000; // 10 seconds in milliseconds
 const DEFAULT_RATE_LIMIT = 100; // requests per minute
+
+// Type definitions for Replicate client responses
+interface ReplicateModel {
+  owner: string;
+  name: string;
+  description?: string;
+  visibility?: "public" | "private";
+  github_url?: string;
+  paper_url?: string;
+  license_url?: string;
+  run_count?: number;
+  cover_image_url?: string;
+  default_example?: Record<string, unknown>;
+  featured?: boolean;
+  tags?: string[];
+  latest_version?: ModelVersion;
+}
+
+interface ReplicatePrediction {
+  id: string;
+  version: string;
+  status: string;
+  input: Record<string, unknown>;
+  output?: unknown;
+  error?: unknown;
+  logs?: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  urls: Record<string, string>;
+  metrics?: Record<string, number>;
+}
+
+interface ReplicatePage<T> {
+  results: T[];
+  next?: string;
+  previous?: string;
+  total?: number;
+}
 
 /**
  * Base class for Replicate API errors.
@@ -63,11 +103,7 @@ export class NotFoundError extends ReplicateError {
  * Error thrown when the API request fails.
  */
 export class APIError extends ReplicateError {
-  constructor(
-    public status: number,
-    public code: string,
-    message: string
-  ) {
+  constructor(public status: number, public code: string, message: string) {
     super(`API error (${status}): ${message}`);
     this.name = "APIError";
   }
@@ -95,11 +131,7 @@ function handleAPIError(error: unknown): never {
       );
       throw new RateLimitExceeded(retryAfter);
     }
-    throw new APIError(
-      error.status,
-      error.statusText,
-      "Request failed"
-    );
+    throw new APIError(error.status, error.statusText, "Request failed");
   }
 
   if (error instanceof Error) {
@@ -117,6 +149,7 @@ export class ReplicateClient {
   private rate_limit: number;
   private request_times: number[];
   private retry_count: number;
+  private client: Replicate;
 
   constructor(api_token?: string) {
     this.api_token = api_token || process.env.REPLICATE_API_TOKEN || "";
@@ -127,6 +160,7 @@ export class ReplicateClient {
     this.rate_limit = DEFAULT_RATE_LIMIT;
     this.request_times = [];
     this.retry_count = 0;
+    this.client = new Replicate({ auth: this.api_token });
   }
 
   /**
@@ -245,214 +279,181 @@ export class ReplicateClient {
       cursor?: string;
     } = {}
   ): Promise<ModelList> {
-    const params = new URLSearchParams();
-    if (options.cursor) {
-      params.set("cursor", options.cursor);
+    try {
+      // Build query parameters
+      const params = new URLSearchParams();
+      if (options.cursor) {
+        params.set("cursor", options.cursor);
+      }
+      if (options.owner) {
+        params.set("username", options.owner); // The API expects 'username' not 'owner'
+      }
+
+      // Make direct request to support all parameters
+      const response = await this.makeRequest<ReplicatePage<ReplicateModel>>(
+        "GET",
+        `/models${params.toString() ? `?${params.toString()}` : ""}`
+      );
+
+      return {
+        models: response.results.map((model) => ({
+          id: `${model.owner}/${model.name}`,
+          owner: model.owner,
+          name: model.name,
+          description: model.description || "",
+          visibility: model.visibility || "public",
+          github_url: model.github_url,
+          paper_url: model.paper_url,
+          license_url: model.license_url,
+          run_count: model.run_count,
+          cover_image_url: model.cover_image_url,
+          default_example: model.default_example,
+          featured: model.featured || false,
+          tags: model.tags || [],
+          latest_version: model.latest_version
+            ? {
+                id: model.latest_version.id,
+                created_at: model.latest_version.created_at,
+                cog_version: model.latest_version.cog_version,
+                openapi_schema: {
+                  ...model.latest_version.openapi_schema,
+                  openapi: "3.0.0",
+                  info: {
+                    title: `${model.owner}/${model.name}`,
+                    version: model.latest_version.id,
+                  },
+                  paths: {},
+                },
+              }
+            : undefined,
+        })),
+        next_cursor: response.next,
+        total_count: response.total || response.results.length,
+      };
+    } catch (error) {
+      handleAPIError(error);
     }
-    if (options.owner) {
-      params.set("user", options.owner);
-    }
-
-    interface ModelResponse {
-      results: {
-        owner: string;
-        name: string;
-        description?: string;
-        visibility?: "public" | "private";
-        github_url?: string;
-        paper_url?: string;
-        license_url?: string;
-        run_count?: number;
-        cover_image_url?: string;
-        latest_version?: Model["latest_version"];
-        default_example?: Record<string, unknown>;
-        featured?: boolean;
-        tags?: string[];
-      }[];
-      next?: string;
-    }
-
-    const result = await this.makeRequest<ModelResponse>(
-      "GET",
-      `/models?${params.toString()}`
-    );
-
-    // Ensure results exists and is an array
-    const models = Array.isArray(result.results) ? result.results : [];
-
-    return {
-      models: models.map((m) => ({
-        id: `${m.owner}/${m.name}`,
-        owner: m.owner,
-        name: m.name,
-        description: m.description,
-        visibility: m.visibility || "public",
-        github_url: m.github_url,
-        paper_url: m.paper_url,
-        license_url: m.license_url,
-        run_count: m.run_count,
-        cover_image_url: m.cover_image_url,
-        latest_version: m.latest_version,
-        default_example: m.default_example,
-        featured: m.featured,
-        tags: m.tags || [],
-      })),
-      next_cursor: result.next,
-    };
   }
 
   /**
    * Search for models using semantic search.
    */
   async searchModels(query: string): Promise<ModelList> {
-    interface SearchResponse {
-      results: {
-        owner: string;
-        name: string;
-        description?: string;
-        visibility?: "public" | "private";
-        github_url?: string;
-        paper_url?: string;
-        license_url?: string;
-        run_count?: number;
-        cover_image_url?: string;
-        latest_version?: Model["latest_version"];
-        default_example?: Record<string, unknown>;
-        featured?: boolean;
-        tags?: string[];
-      }[];
-      next?: string;
-    }
+    try {
+      // Use the official client for search
+      const response = (await this.client.models.search(
+        query
+      )) as unknown as ReplicatePage<ReplicateModel>;
 
-    const params = new URLSearchParams();
-    params.set("search", query);
-    
-    const result = await this.makeRequest<SearchResponse>("GET", `/models?${params.toString()}`);
-
-    // Add debug logging
-    console.debug('Search response:', JSON.stringify(result, null, 2));
-
-    // Ensure we have a valid response structure
-    if (!result || typeof result !== 'object') {
       return {
-        models: [],
-        next_cursor: undefined
+        models: response.results.map((model) => ({
+          id: `${model.owner}/${model.name}`,
+          owner: model.owner,
+          name: model.name,
+          description: model.description || "",
+          visibility: model.visibility || "public",
+          github_url: model.github_url,
+          paper_url: model.paper_url,
+          license_url: model.license_url,
+          run_count: model.run_count,
+          cover_image_url: model.cover_image_url,
+          default_example: model.default_example,
+          featured: model.featured || false,
+          tags: model.tags || [],
+          latest_version: model.latest_version
+            ? {
+                id: model.latest_version.id,
+                created_at: model.latest_version.created_at,
+                cog_version: model.latest_version.cog_version,
+                openapi_schema: {
+                  ...model.latest_version.openapi_schema,
+                  openapi: "3.0.0",
+                  info: {
+                    title: `${model.owner}/${model.name}`,
+                    version: model.latest_version.id,
+                  },
+                  paths: {},
+                },
+              }
+            : undefined,
+        })),
+        next_cursor: response.next,
+        total_count: response.results.length,
       };
+    } catch (error) {
+      handleAPIError(error);
     }
-
-    // Ensure results exists and is an array
-    const models = Array.isArray(result.results) ? result.results : [];
-
-    return {
-      models: models.map((m) => ({
-        id: `${m.owner}/${m.name}`,
-        owner: m.owner,
-        name: m.name,
-        description: m.description,
-        visibility: m.visibility || "public",
-        github_url: m.github_url,
-        paper_url: m.paper_url,
-        license_url: m.license_url,
-        run_count: m.run_count,
-        cover_image_url: m.cover_image_url,
-        latest_version: m.latest_version,
-        default_example: m.default_example,
-        featured: m.featured,
-        tags: m.tags || [],
-      })),
-      next_cursor: result.next,
-    };
   }
 
   /**
-   * List available collections with pagination.
+   * List available collections.
    */
-  async listCollections(options: {
-    cursor?: string;
-  } = {}): Promise<CollectionList> {
-    const params = new URLSearchParams();
-    if (options.cursor) {
-      params.set("cursor", options.cursor);
-    }
+  async listCollections(
+    options: {
+      cursor?: string;
+    } = {}
+  ): Promise<CollectionList> {
+    try {
+      // Use the official client for collections
+      const response = await this.client.collections.list();
 
-    interface CollectionResponse {
-      results: {
-        id: string;
-        name: string;
-        slug: string;
-        description?: string;
-        models: {
-          owner: string;
-          name: string;
-          description?: string;
-          visibility?: "public" | "private";
-          github_url?: string;
-          paper_url?: string;
-          license_url?: string;
-          run_count?: number;
-          cover_image_url?: string;
-          latest_version?: Model["latest_version"];
-          default_example?: Record<string, unknown>;
-          featured?: boolean;
-          tags?: string[];
-        }[];
-        featured?: boolean;
-        created_at: string;
-        updated_at?: string;
-      }[];
-      next?: string;
-      total_count?: number;
-    }
-
-    const result = await this.makeRequest<CollectionResponse>(
-      "GET",
-      `/collections?${params.toString()}`
-    );
-
-    // Add debug logging
-    console.debug('Collections response:', JSON.stringify(result, null, 2));
-
-    // Ensure we have a valid response structure
-    if (!result || typeof result !== 'object') {
       return {
-        collections: [],
-        next_cursor: undefined,
-        total_count: 0
-      };
-    }
-
-    // Ensure results exists and is an array
-    const collections = Array.isArray(result.results) ? result.results : [];
-
-    return {
-      collections: collections.map((c) => ({
-        id: c.id,
-        name: c.name,
-        slug: c.slug,
-        description: c.description,
-        models: (c.models || []).map((m) => ({
-          id: `${m.owner}/${m.name}`,
-          owner: m.owner,
-          name: m.name,
-          description: m.description,
-          visibility: m.visibility || "public",
-          github_url: m.github_url,
-          paper_url: m.paper_url,
-          license_url: m.license_url,
-          run_count: m.run_count,
-          cover_image_url: m.cover_image_url,
-          latest_version: m.latest_version,
-          default_example: m.default_example,
-          featured: m.featured,
-          tags: m.tags || [],
+        collections: response.results.map((collection) => ({
+          id: collection.slug, // Using slug as id since the official client doesn't provide an id
+          name: collection.name,
+          slug: collection.slug,
+          description: collection.description || "",
+          models:
+            collection.models?.map((model) => ({
+              id: `${model.owner}/${model.name}`,
+              owner: model.owner,
+              name: model.name,
+              description: model.description || "",
+              visibility: model.visibility || "public",
+              github_url: model.github_url,
+              paper_url: model.paper_url,
+              license_url: model.license_url,
+              run_count: model.run_count,
+              cover_image_url: model.cover_image_url,
+              default_example: model.default_example
+                ? ({
+                    input: model.default_example.input,
+                    output: model.default_example.output,
+                    error: model.default_example.error,
+                    status: model.default_example.status,
+                    logs: model.default_example.logs,
+                    metrics: model.default_example.metrics,
+                  } as Record<string, unknown>)
+                : undefined,
+              featured: false, // The official client doesn't provide this
+              tags: [], // The official client doesn't provide this
+              latest_version: model.latest_version
+                ? {
+                    id: model.latest_version.id,
+                    created_at: model.latest_version.created_at,
+                    cog_version: model.latest_version.cog_version,
+                    openapi_schema: {
+                      ...model.latest_version.openapi_schema,
+                      openapi: "3.0.0",
+                      info: {
+                        title: `${model.owner}/${model.name}`,
+                        version: model.latest_version.id,
+                      },
+                      paths: {},
+                    },
+                  }
+                : undefined,
+            })) || [],
+          featured: false, // The official client doesn't provide this
+          created_at: new Date().toISOString(), // The official client doesn't provide this
+          updated_at: undefined,
         })),
-        featured: c.featured,
-        created_at: c.created_at,
-        updated_at: c.updated_at,
-      })),
-      next_cursor: result.next,
-      total_count: result.total_count,
-    };
+        next_cursor: response.next,
+        total_count: response.results.length,
+      };
+    } catch (error) {
+      handleAPIError(error);
+    }
   }
 
   /**
@@ -464,205 +465,135 @@ export class ReplicateClient {
       name: string;
       slug: string;
       description?: string;
-      models: {
-        owner: string;
-        name: string;
-        description?: string;
-        visibility?: "public" | "private";
-        github_url?: string;
-        paper_url?: string;
-        license_url?: string;
-        run_count?: number;
-        cover_image_url?: string;
-        latest_version?: Model["latest_version"];
-        default_example?: Record<string, unknown>;
-        featured?: boolean;
-        tags?: string[];
-      }[];
+      models: ReplicateModel[];
       featured?: boolean;
       created_at: string;
       updated_at?: string;
     }
 
-    const result = await this.makeRequest<CollectionResponse>(
+    const response = await this.makeRequest<CollectionResponse>(
       "GET",
       `/collections/${slug}`
     );
 
     return {
-      id: result.id,
-      name: result.name,
-      slug: result.slug,
-      description: result.description,
-      models: result.models.map((m) => ({
-        id: `${m.owner}/${m.name}`,
-        owner: m.owner,
-        name: m.name,
-        description: m.description,
-        visibility: m.visibility || "public",
-        github_url: m.github_url,
-        paper_url: m.paper_url,
-        license_url: m.license_url,
-        run_count: m.run_count,
-        cover_image_url: m.cover_image_url,
-        latest_version: m.latest_version,
-        default_example: m.default_example,
-        featured: m.featured,
-        tags: m.tags || [],
+      id: response.id,
+      name: response.name,
+      slug: response.slug,
+      description: response.description || "",
+      models: response.models.map((model) => ({
+        id: `${model.owner}/${model.name}`,
+        owner: model.owner,
+        name: model.name,
+        description: model.description || "",
+        visibility: model.visibility || "public",
+        github_url: model.github_url,
+        paper_url: model.paper_url,
+        license_url: model.license_url,
+        run_count: model.run_count,
+        cover_image_url: model.cover_image_url,
+        default_example: model.default_example,
+        featured: model.featured || false,
+        tags: model.tags || [],
+        latest_version: model.latest_version,
       })),
-      featured: result.featured,
-      created_at: result.created_at,
-      updated_at: result.updated_at,
+      featured: response.featured || false,
+      created_at: response.created_at,
+      updated_at: response.updated_at,
     };
   }
 
   /**
-   * Create a new prediction using a model version.
+   * Create a new prediction.
    */
   async createPrediction(options: {
     version: string;
     input: ModelIO;
     webhook?: string;
   }): Promise<Prediction> {
-    interface PredictionBody {
-      version: string;
-      input: ModelIO;
-      webhook_completed?: string;
+    try {
+      // Use the official client for predictions
+      const prediction = (await this.client.predictions.create({
+        version: options.version,
+        input: options.input,
+        webhook: options.webhook,
+      })) as unknown as ReplicatePrediction;
+
+      return {
+        id: prediction.id,
+        version: prediction.version,
+        status: prediction.status as PredictionStatus,
+        input: prediction.input as ModelIO,
+        output: prediction.output as ModelIO | undefined,
+        error: prediction.error ? String(prediction.error) : undefined,
+        logs: prediction.logs,
+        created_at: prediction.created_at,
+        started_at: prediction.started_at,
+        completed_at: prediction.completed_at,
+        urls: prediction.urls,
+        metrics: prediction.metrics,
+      };
+    } catch (error) {
+      handleAPIError(error);
     }
-
-    const body: PredictionBody = {
-      version: options.version,
-      input: options.input,
-    };
-    if (options.webhook) {
-      body.webhook_completed = options.webhook;
-    }
-
-    interface PredictionResponse {
-      id: string;
-      version: string;
-      status: PredictionStatus;
-      input: ModelIO;
-      output?: ModelIO;
-      error?: string;
-      logs?: string;
-      created_at: string;
-      started_at?: string;
-      completed_at?: string;
-      urls: Record<string, string>;
-      metrics?: Record<string, number>;
-    }
-
-    const result = await this.makeRequest<PredictionResponse>(
-      "POST",
-      "/predictions",
-      {
-        method: "POST",
-        body: JSON.stringify(body),
-      }
-    );
-
-    return {
-      id: result.id,
-      version: result.version,
-      status: result.status,
-      input: result.input,
-      output: result.output,
-      error: result.error,
-      logs: result.logs,
-      created_at: result.created_at,
-      started_at: result.started_at,
-      completed_at: result.completed_at,
-      urls: result.urls,
-      metrics: result.metrics,
-      stream_url: result.urls?.stream,
-    };
   }
 
   /**
-   * Get the status and results of a prediction.
+   * Get the status of a prediction.
    */
   async getPredictionStatus(prediction_id: string): Promise<Prediction> {
-    interface PredictionResponse {
-      id: string;
-      version: string;
-      status: PredictionStatus;
-      input: ModelIO;
-      output?: ModelIO;
-      error?: string;
-      logs?: string;
-      created_at: string;
-      started_at?: string;
-      completed_at?: string;
-      urls: Record<string, string>;
-      metrics?: Record<string, number>;
+    try {
+      // Use the official client for predictions
+      const prediction = (await this.client.predictions.get(
+        prediction_id
+      )) as unknown as ReplicatePrediction;
+
+      return {
+        id: prediction.id,
+        version: prediction.version,
+        status: prediction.status as PredictionStatus,
+        input: prediction.input as ModelIO,
+        output: prediction.output as ModelIO | undefined,
+        error: prediction.error ? String(prediction.error) : undefined,
+        logs: prediction.logs,
+        created_at: prediction.created_at,
+        started_at: prediction.started_at,
+        completed_at: prediction.completed_at,
+        urls: prediction.urls,
+        metrics: prediction.metrics,
+      };
+    } catch (error) {
+      handleAPIError(error);
     }
-
-    const result = await this.makeRequest<PredictionResponse>(
-      "GET",
-      `/predictions/${prediction_id}`
-    );
-
-    return {
-      id: result.id,
-      version: result.version,
-      status: result.status,
-      input: result.input,
-      output: result.output,
-      error: result.error,
-      logs: result.logs,
-      created_at: result.created_at,
-      started_at: result.started_at,
-      completed_at: result.completed_at,
-      urls: result.urls,
-      metrics: result.metrics,
-      stream_url: result.urls?.stream,
-    };
   }
 
   /**
    * Cancel a running prediction.
    */
   async cancelPrediction(prediction_id: string): Promise<Prediction> {
-    interface PredictionResponse {
-      id: string;
-      version: string;
-      status: PredictionStatus;
-      input: ModelIO;
-      output?: ModelIO;
-      error?: string;
-      logs?: string;
-      created_at: string;
-      started_at?: string;
-      completed_at?: string;
-      urls: Record<string, string>;
-      metrics?: Record<string, number>;
-    }
-
-    const result = await this.makeRequest<PredictionResponse>(
+    const response = await this.makeRequest<ReplicatePrediction>(
       "POST",
       `/predictions/${prediction_id}/cancel`
     );
 
     return {
-      id: result.id,
-      version: result.version,
-      status: result.status,
-      input: result.input,
-      output: result.output,
-      error: result.error,
-      logs: result.logs,
-      created_at: result.created_at,
-      started_at: result.started_at,
-      completed_at: result.completed_at,
-      urls: result.urls,
-      metrics: result.metrics,
-      stream_url: result.urls?.stream,
+      id: response.id,
+      version: response.version,
+      status: response.status as PredictionStatus,
+      input: response.input as ModelIO,
+      output: response.output as ModelIO | undefined,
+      error: response.error ? String(response.error) : undefined,
+      logs: response.logs,
+      created_at: response.created_at,
+      started_at: response.started_at,
+      completed_at: response.completed_at,
+      urls: response.urls,
+      metrics: response.metrics,
     };
   }
 
   /**
-   * List recent predictions with optional filtering.
+   * List predictions with optional filtering.
    */
   async listPredictions(
     options: {
@@ -671,62 +602,52 @@ export class ReplicateClient {
       cursor?: string;
     } = {}
   ): Promise<Prediction[]> {
-    const params = new URLSearchParams();
-    if (options.status) {
-      params.set("status", options.status);
-    }
-    if (options.limit) {
-      params.set("limit", options.limit.toString());
-    }
-    if (options.cursor) {
-      params.set("cursor", options.cursor);
-    }
+    try {
+      // Use the official client for predictions
+      const response =
+        (await this.client.predictions.list()) as unknown as ReplicatePage<ReplicatePrediction>;
 
-    interface PredictionResponse {
-      id: string;
-      version: string;
-      status: PredictionStatus;
-      input: ModelIO;
-      output?: ModelIO;
-      error?: string;
-      logs?: string;
-      created_at: string;
-      started_at?: string;
-      completed_at?: string;
-      urls: Record<string, string>;
-      metrics?: Record<string, number>;
+      // Filter and limit results
+      const filteredPredictions = options.status
+        ? response.results.filter((p) => p.status === options.status)
+        : response.results;
+
+      const limitedPredictions = options.limit
+        ? filteredPredictions.slice(0, options.limit)
+        : filteredPredictions;
+
+      return limitedPredictions.map((prediction) => ({
+        id: prediction.id,
+        version: prediction.version,
+        status: prediction.status as PredictionStatus,
+        input: prediction.input as ModelIO,
+        output: prediction.output as ModelIO | undefined,
+        error: prediction.error ? String(prediction.error) : undefined,
+        logs: prediction.logs,
+        created_at: prediction.created_at,
+        started_at: prediction.started_at,
+        completed_at: prediction.completed_at,
+        urls: prediction.urls,
+        metrics: prediction.metrics,
+      }));
+    } catch (error) {
+      handleAPIError(error);
     }
-
-    const result = await this.makeRequest<PredictionResponse[]>(
-      "GET",
-      `/predictions?${params.toString()}`
-    );
-
-    return result.map((p) => ({
-      id: p.id,
-      version: p.version,
-      status: p.status,
-      input: p.input,
-      output: p.output,
-      error: p.error,
-      logs: p.logs,
-      created_at: p.created_at,
-      started_at: p.started_at,
-      completed_at: p.completed_at,
-      urls: p.urls,
-      metrics: p.metrics,
-      stream_url: p.urls?.stream,
-    }));
   }
 
   /**
-   * Get the signing secret for verifying webhook requests.
+   * Get the webhook signing secret.
    */
   async getWebhookSecret(): Promise<string> {
-    const result = await this.makeRequest<{ key: string }>(
+    interface WebhookResponse {
+      key: string;
+    }
+
+    const response = await this.makeRequest<WebhookResponse>(
       "GET",
       "/webhooks/default/secret"
     );
-    return result.key;
+
+    return response.key;
   }
 }
