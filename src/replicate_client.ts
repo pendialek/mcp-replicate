@@ -1,5 +1,5 @@
 /**
- * Replicate API client implementation.
+ * Replicate API client implementation with caching support.
  */
 
 import Replicate from "replicate";
@@ -11,6 +11,11 @@ import type {
   ModelIO,
 } from "./models/prediction.js";
 import type { Collection, CollectionList } from "./models/collection.js";
+import {
+  modelCache,
+  predictionCache,
+  collectionCache,
+} from "./services/cache.js";
 
 // Constants
 const REPLICATE_API_BASE = "https://api.replicate.com/v1";
@@ -277,13 +282,22 @@ export class ReplicateClient {
     options: { owner?: string; cursor?: string } = {}
   ): Promise<ModelList> {
     try {
+      // Check cache first
+      const cacheKey = `models:${options.owner || "all"}:${
+        options.cursor || ""
+      }`;
+      const cached = modelCache.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
+
       if (options.owner) {
         // If owner is specified, use search to find their models
         const response = (await this.client.models.search(
           `owner:${options.owner}`
         )) as unknown as ReplicatePage<ReplicateModel>;
 
-        return {
+        const result = {
           models: response.results.map((model) => ({
             id: `${model.owner}/${model.name}`,
             owner: model.owner,
@@ -318,6 +332,10 @@ export class ReplicateClient {
           next_cursor: response.next,
           total_count: response.total || response.results.length,
         };
+
+        // Cache the result
+        modelCache.set(cacheKey, result);
+        return result;
       }
 
       // Otherwise list all models
@@ -331,7 +349,7 @@ export class ReplicateClient {
         `/models${params.toString() ? `?${params.toString()}` : ""}`
       );
 
-      return {
+      const result = {
         models: response.results.map((model) => ({
           id: `${model.owner}/${model.name}`,
           owner: model.owner,
@@ -366,6 +384,10 @@ export class ReplicateClient {
         next_cursor: response.next,
         total_count: response.total || response.results.length,
       };
+
+      // Cache the result
+      modelCache.set(cacheKey, result);
+      return result;
     } catch (error) {
       handleAPIError(error);
     }
@@ -376,12 +398,19 @@ export class ReplicateClient {
    */
   async searchModels(query: string): Promise<ModelList> {
     try {
+      // Check cache first
+      const cacheKey = `search:${query}`;
+      const cached = modelCache.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
+
       // Use the official client for search
       const response = (await this.client.models.search(
         query
       )) as unknown as ReplicatePage<ReplicateModel>;
 
-      return {
+      const result = {
         models: response.results.map((model) => ({
           id: `${model.owner}/${model.name}`,
           owner: model.owner,
@@ -416,6 +445,10 @@ export class ReplicateClient {
         next_cursor: response.next,
         total_count: response.results.length,
       };
+
+      // Cache the result
+      modelCache.set(cacheKey, result);
+      return result;
     } catch (error) {
       handleAPIError(error);
     }
@@ -430,12 +463,19 @@ export class ReplicateClient {
     } = {}
   ): Promise<CollectionList> {
     try {
+      // Check cache first
+      const cacheKey = `collections:${options.cursor || ""}`;
+      const cached = collectionCache.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
+
       // Use the official client for collections
       const response = await this.client.collections.list();
 
-      return {
+      const result = {
         collections: response.results.map((collection) => ({
-          id: collection.slug, // Using slug as id since the official client doesn't provide an id
+          id: collection.slug,
           name: collection.name,
           slug: collection.slug,
           description: collection.description || "",
@@ -461,8 +501,8 @@ export class ReplicateClient {
                     metrics: model.default_example.metrics,
                   } as Record<string, unknown>)
                 : undefined,
-              featured: false, // The official client doesn't provide this
-              tags: [], // The official client doesn't provide this
+              featured: false,
+              tags: [],
               latest_version: model.latest_version
                 ? {
                     id: model.latest_version.id,
@@ -480,13 +520,17 @@ export class ReplicateClient {
                   }
                 : undefined,
             })) || [],
-          featured: false, // The official client doesn't provide this
-          created_at: new Date().toISOString(), // The official client doesn't provide this
+          featured: false,
+          created_at: new Date().toISOString(),
           updated_at: undefined,
         })),
         next_cursor: response.next,
         total_count: response.results.length,
       };
+
+      // Cache the result
+      collectionCache.set(cacheKey, result);
+      return result;
     } catch (error) {
       handleAPIError(error);
     }
@@ -496,47 +540,62 @@ export class ReplicateClient {
    * Get a specific collection by slug.
    */
   async getCollection(slug: string): Promise<Collection> {
-    interface CollectionResponse {
-      id: string;
-      name: string;
-      slug: string;
-      description?: string;
-      models: ReplicateModel[];
-      featured?: boolean;
-      created_at: string;
-      updated_at?: string;
+    try {
+      // Check cache first
+      const cacheKey = `collection:${slug}`;
+      const cached = collectionCache.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
+
+      interface CollectionResponse {
+        id: string;
+        name: string;
+        slug: string;
+        description?: string;
+        models: ReplicateModel[];
+        featured?: boolean;
+        created_at: string;
+        updated_at?: string;
+      }
+
+      const response = await this.makeRequest<CollectionResponse>(
+        "GET",
+        `/collections/${slug}`
+      );
+
+      const result = {
+        id: response.id,
+        name: response.name,
+        slug: response.slug,
+        description: response.description || "",
+        models: response.models.map((model) => ({
+          id: `${model.owner}/${model.name}`,
+          owner: model.owner,
+          name: model.name,
+          description: model.description || "",
+          visibility: model.visibility || "public",
+          github_url: model.github_url,
+          paper_url: model.paper_url,
+          license_url: model.license_url,
+          run_count: model.run_count,
+          cover_image_url: model.cover_image_url,
+          default_example: model.default_example,
+          featured: model.featured || false,
+          tags: model.tags || [],
+          latest_version: model.latest_version,
+        })),
+        featured: response.featured || false,
+        created_at: response.created_at,
+        updated_at: response.updated_at,
+      };
+
+      // Cache the result
+      collectionCache.set(cacheKey, result);
+      return result;
+    } catch (error) {
+      handleAPIError(error);
     }
-
-    const response = await this.makeRequest<CollectionResponse>(
-      "GET",
-      `/collections/${slug}`
-    );
-
-    return {
-      id: response.id,
-      name: response.name,
-      slug: response.slug,
-      description: response.description || "",
-      models: response.models.map((model) => ({
-        id: `${model.owner}/${model.name}`,
-        owner: model.owner,
-        name: model.name,
-        description: model.description || "",
-        visibility: model.visibility || "public",
-        github_url: model.github_url,
-        paper_url: model.paper_url,
-        license_url: model.license_url,
-        run_count: model.run_count,
-        cover_image_url: model.cover_image_url,
-        default_example: model.default_example,
-        featured: model.featured || false,
-        tags: model.tags || [],
-        latest_version: model.latest_version,
-      })),
-      featured: response.featured || false,
-      created_at: response.created_at,
-      updated_at: response.updated_at,
-    };
   }
 
   /**
@@ -561,7 +620,7 @@ export class ReplicateClient {
         webhook: options.webhook,
       })) as unknown as ReplicatePrediction;
 
-      return {
+      const result = {
         id: prediction.id,
         version: prediction.version,
         status: prediction.status as PredictionStatus,
@@ -575,6 +634,10 @@ export class ReplicateClient {
         urls: prediction.urls,
         metrics: prediction.metrics,
       };
+
+      // Cache the result
+      predictionCache.set(`prediction:${prediction.id}`, result);
+      return result;
     } catch (error) {
       handleAPIError(error);
     }
@@ -585,12 +648,23 @@ export class ReplicateClient {
    */
   async getPredictionStatus(prediction_id: string): Promise<Prediction> {
     try {
+      // Check cache first
+      const cacheKey = `prediction:${prediction_id}`;
+      const cached = predictionCache.get(cacheKey);
+      // Only use cache for completed predictions
+      if (
+        cached &&
+        ["succeeded", "failed", "canceled"].includes(cached.status)
+      ) {
+        return cached;
+      }
+
       // Use the official client for predictions
       const prediction = (await this.client.predictions.get(
         prediction_id
       )) as unknown as ReplicatePrediction;
 
-      return {
+      const result = {
         id: prediction.id,
         version: prediction.version,
         status: prediction.status as PredictionStatus,
@@ -604,6 +678,13 @@ export class ReplicateClient {
         urls: prediction.urls,
         metrics: prediction.metrics,
       };
+
+      // Cache completed predictions
+      if (["succeeded", "failed", "canceled"].includes(result.status)) {
+        predictionCache.set(cacheKey, result);
+      }
+
+      return result;
     } catch (error) {
       handleAPIError(error);
     }
@@ -618,7 +699,7 @@ export class ReplicateClient {
       `/predictions/${prediction_id}/cancel`
     );
 
-    return {
+    const result = {
       id: response.id,
       version: response.version,
       status: response.status as PredictionStatus,
@@ -632,6 +713,10 @@ export class ReplicateClient {
       urls: response.urls,
       metrics: response.metrics,
     };
+
+    // Update cache
+    predictionCache.set(`prediction:${prediction_id}`, result);
+    return result;
   }
 
   /**
@@ -645,6 +730,15 @@ export class ReplicateClient {
     } = {}
   ): Promise<Prediction[]> {
     try {
+      // Check cache first
+      const cacheKey = `predictions:${options.status || "all"}:${
+        options.limit || "all"
+      }:${options.cursor || ""}`;
+      const cached = predictionCache.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
+
       // Use the official client for predictions
       const response =
         (await this.client.predictions.list()) as unknown as ReplicatePage<ReplicatePrediction>;
@@ -658,7 +752,7 @@ export class ReplicateClient {
         ? filteredPredictions.slice(0, options.limit)
         : filteredPredictions;
 
-      return limitedPredictions.map((prediction) => ({
+      const result = limitedPredictions.map((prediction) => ({
         id: prediction.id,
         version: prediction.version,
         status: prediction.status as PredictionStatus,
@@ -672,6 +766,10 @@ export class ReplicateClient {
         urls: prediction.urls,
         metrics: prediction.metrics,
       }));
+
+      // Cache the result
+      predictionCache.set(cacheKey, result);
+      return result;
     } catch (error) {
       handleAPIError(error);
     }
@@ -682,6 +780,13 @@ export class ReplicateClient {
    */
   async getModel(owner: string, name: string): Promise<Model> {
     try {
+      // Check cache first
+      const cacheKey = `model:${owner}/${name}`;
+      const cached = modelCache.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
+
       // Use direct API request to get model details
       const response = await this.makeRequest<ReplicateModel>(
         "GET",
@@ -693,7 +798,7 @@ export class ReplicateClient {
         ReplicatePage<ModelVersion>
       >("GET", `/models/${owner}/${name}/versions`);
 
-      const model: Model = {
+      const result: Model = {
         id: `${response.owner}/${response.name}`,
         owner: response.owner,
         name: response.name,
@@ -723,7 +828,9 @@ export class ReplicateClient {
           : undefined,
       };
 
-      return model;
+      // Cache the result
+      modelCache.set(cacheKey, result);
+      return result;
     } catch (error) {
       handleAPIError(error);
     }
