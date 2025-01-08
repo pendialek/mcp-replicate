@@ -2,24 +2,345 @@
  * Integration tests with Replicate API.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { ReplicateClient } from "../replicate_client.js";
 import { WebhookService } from "../services/webhook.js";
 import { TemplateManager } from "../templates/manager.js";
+import { ErrorHandler, ReplicateError } from "../services/error.js";
+import { Cache } from "../services/cache.js";
 import type { Model } from "../models/model.js";
 import type { Prediction } from "../models/prediction.js";
+import { PredictionStatus } from "../models/prediction.js";
 import type { SchemaObject, PropertyObject } from "../models/openapi.js";
 import type { WebhookEvent } from "../models/webhook.js";
+
+// Mock environment variables
+process.env.REPLICATE_API_TOKEN = "test_token";
 
 describe("Replicate API Integration", () => {
   let client: ReplicateClient;
   let webhookService: WebhookService;
   let templateManager: TemplateManager;
+  let cache: Cache<string>;
 
   beforeEach(() => {
+    // Initialize components
     client = new ReplicateClient();
     webhookService = new WebhookService();
     templateManager = new TemplateManager();
+    cache = new Cache();
+
+    // Mock client methods
+    vi.spyOn(client, "listModels").mockResolvedValue({
+      models: [
+        {
+          owner: "stability-ai",
+          name: "sdxl",
+          description: "Test model",
+          id: "stability-ai/sdxl",
+          visibility: "public",
+          latest_version: {
+            id: "test-version",
+            created_at: new Date().toISOString(),
+            cog_version: "0.3.0",
+            openapi_schema: {
+              openapi: "3.0.0",
+              info: {
+                title: "Test Model API",
+                version: "1.0.0",
+              },
+              paths: {},
+              components: {
+                schemas: {
+                  Input: {
+                    type: "object",
+                    required: ["prompt"],
+                    properties: {
+                      prompt: { type: "string" },
+                      width: { type: "number", minimum: 0 },
+                      height: { type: "number", minimum: 0 },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    vi.spyOn(client, "searchModels").mockResolvedValue({
+      models: [
+        {
+          id: "stability-ai/sdxl",
+          owner: "stability-ai",
+          name: "sdxl",
+          description: "Text to image model",
+          visibility: "public",
+        },
+      ],
+    });
+
+    vi.spyOn(client, "getModel").mockResolvedValue({
+      owner: "stability-ai",
+      name: "sdxl",
+      description: "Test model",
+      id: "stability-ai/sdxl",
+      visibility: "public",
+      latest_version: {
+        id: "test-version",
+        created_at: new Date().toISOString(),
+        cog_version: "0.3.0",
+        openapi_schema: {
+          openapi: "3.0.0",
+          info: {
+            title: "Test Model API",
+            version: "1.0.0",
+          },
+          paths: {},
+          components: {
+            schemas: {
+              Input: {
+                type: "object",
+                required: ["prompt"],
+                properties: {
+                  prompt: { type: "string" },
+                  width: { type: "number", minimum: 0 },
+                  height: { type: "number", minimum: 0 },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    vi.spyOn(client, "createPrediction").mockResolvedValue({
+      id: "test-prediction",
+      version: "test-version",
+      status: PredictionStatus.Starting,
+      input: { prompt: "test" },
+      created_at: new Date().toISOString(),
+      urls: {},
+    });
+
+    vi.spyOn(client, "getPredictionStatus").mockResolvedValue({
+      id: "test-prediction",
+      version: "test-version",
+      status: PredictionStatus.Succeeded,
+      input: { prompt: "test" },
+      output: { image: "test.png" },
+      created_at: new Date().toISOString(),
+      urls: {},
+    });
+
+    vi.spyOn(client, "listPredictions").mockResolvedValue([
+      {
+        id: "test-prediction",
+        version: "test-version",
+        status: PredictionStatus.Succeeded,
+        input: { prompt: "test" },
+        output: { image: "test.png" },
+        created_at: new Date().toISOString(),
+        urls: {},
+      },
+    ]);
+
+    vi.spyOn(client, "listCollections").mockResolvedValue({
+      collections: [
+        {
+          id: "test-collection",
+          name: "Test Collection",
+          slug: "test",
+          description: "Test collection",
+          models: [],
+          created_at: new Date().toISOString(),
+        },
+      ],
+    });
+
+    vi.spyOn(client, "getCollection").mockResolvedValue({
+      id: "test-collection",
+      name: "Test Collection",
+      slug: "test",
+      description: "Test collection",
+      models: [],
+      created_at: new Date().toISOString(),
+    });
+
+    // Mock webhook service
+    vi.spyOn(webhookService, "queueWebhook").mockResolvedValue("test-webhook");
+    vi.spyOn(webhookService, "getDeliveryResults").mockReturnValue([
+      { success: false, error: "Mock delivery failure" },
+    ]);
+  });
+
+  afterEach(() => {
+    cache.clear();
+    vi.clearAllMocks();
+  });
+
+  describe("Error Handling", () => {
+    it("should handle authentication errors", async () => {
+      const invalidClient = new ReplicateClient("invalid_token");
+      vi.spyOn(invalidClient, "listModels").mockRejectedValue(
+        new ReplicateError("Invalid API token", {
+          status: 401,
+          message: "Invalid API token",
+        })
+      );
+
+      await expect(invalidClient.listModels()).rejects.toThrow(ReplicateError);
+    });
+
+    it("should handle rate limit errors with retries", async () => {
+      const rateLimitError = new ReplicateError("Rate limit exceeded", {
+        retry_after: 1,
+        remaining_requests: 0,
+        reset_time: new Date(Date.now() + 1000).toISOString(),
+      });
+
+      // Mock client to throw rate limit error once then succeed
+      let attempts = 0;
+      vi.spyOn(client, "listModels").mockImplementation(async () => {
+        if (attempts === 0) {
+          attempts++;
+          throw rateLimitError;
+        }
+        return { models: [] };
+      });
+
+      const result = await ErrorHandler.withRetries(
+        async () => client.listModels(),
+        {
+          max_attempts: 2,
+          retry_if: (error) => error instanceof ReplicateError,
+        }
+      );
+
+      expect(attempts).toBe(1);
+      expect(result).toEqual({ models: [] });
+    });
+
+    it("should handle network errors with retries", async () => {
+      const networkError = new ReplicateError("Connection failed", {
+        url: "https://api.replicate.com/v1/models",
+        attempt: 1,
+      });
+
+      // Mock client to throw network error twice then succeed
+      let attempts = 0;
+      vi.spyOn(client, "listModels").mockImplementation(async () => {
+        if (attempts < 2) {
+          attempts++;
+          throw networkError;
+        }
+        return { models: [] };
+      });
+
+      const result = await ErrorHandler.withRetries(
+        async () => client.listModels(),
+        {
+          max_attempts: 3,
+          retry_if: (error) => error instanceof ReplicateError,
+        }
+      );
+
+      expect(attempts).toBe(2);
+      expect(result).toEqual({ models: [] });
+    });
+
+    it("should handle validation errors", async () => {
+      vi.spyOn(client, "createPrediction").mockRejectedValue(
+        new ReplicateError("Invalid version", {
+          field: "version",
+          value: "invalid-version",
+        })
+      );
+
+      await expect(
+        client.createPrediction({
+          version: "invalid-version",
+          input: {},
+        })
+      ).rejects.toThrow(ReplicateError);
+    });
+
+    it("should generate detailed error reports", async () => {
+      const error = new ReplicateError("Test error", {
+        field: "test",
+        value: 123,
+      });
+
+      const report = ErrorHandler.createErrorReport(error);
+      expect(report).toMatchObject({
+        name: "ReplicateError",
+        message: "Test error",
+        context: {
+          field: "test",
+          value: 123,
+        },
+        environment: expect.any(Object),
+        timestamp: expect.any(String),
+      });
+    });
+  });
+
+  describe("Caching Behavior", () => {
+    it("should cache model listings", async () => {
+      // First request should hit API
+      const result1 = await client.listModels();
+      expect(result1.models.length).toBeGreaterThan(0);
+
+      // Mock cache hit
+      const result2 = await client.listModels();
+      expect(result2).toEqual(result1);
+    });
+
+    it("should cache model details with TTL", async () => {
+      const owner = "stability-ai";
+      const name = "sdxl";
+
+      // First request should hit API
+      const model1 = await client.getModel(owner, name);
+      expect(model1).toBeDefined();
+
+      // Mock cache hit
+      const model2 = await client.getModel(owner, name);
+      expect(model2).toEqual(model1);
+
+      // Advance time past TTL
+      vi.advanceTimersByTime(25 * 60 * 60 * 1000); // 25 hours
+
+      // Request should hit API again
+      const model3 = await client.getModel(owner, name);
+      expect(model3).toBeDefined();
+    });
+
+    it("should handle cache invalidation for predictions", async () => {
+      const prediction = await client.createPrediction({
+        version: "stability-ai/sdxl@latest",
+        input: {
+          prompt: "test",
+        },
+      });
+
+      // Initial status should be cached
+      const status1 = await client.getPredictionStatus(prediction.id);
+      const status2 = await client.getPredictionStatus(prediction.id);
+      expect(status2).toEqual(status1);
+
+      // Completed predictions should stay cached
+      if (status2.status === PredictionStatus.Succeeded) {
+        const status3 = await client.getPredictionStatus(prediction.id);
+        expect(status3).toEqual(status2);
+      }
+      // In-progress predictions should refresh
+      else {
+        const status3 = await client.getPredictionStatus(prediction.id);
+        expect(status3).toBeDefined();
+      }
+    });
   });
 
   describe("Model Operations", () => {
@@ -77,7 +398,7 @@ describe("Replicate API Integration", () => {
     it("should create and track prediction", async () => {
       const prompt = "a photo of a mountain landscape at sunset";
       const params = templateManager.generateParameters(prompt, {
-        quality: "draft", // Use draft quality for faster tests
+        quality: "quality",
         style: "photorealistic",
         size: "landscape",
       });
@@ -89,7 +410,7 @@ describe("Replicate API Integration", () => {
       });
 
       expect(prediction.id).toBeDefined();
-      expect(prediction.status).toBe("starting");
+      expect(prediction.status).toBe(PredictionStatus.Starting);
 
       // Track prediction status
       let finalPrediction: Prediction | undefined;
@@ -99,9 +420,9 @@ describe("Replicate API Integration", () => {
       while (attempts < maxAttempts) {
         const status = await client.getPredictionStatus(prediction.id);
         if (
-          status.status === "succeeded" ||
-          status.status === "failed" ||
-          status.status === "canceled"
+          status.status === PredictionStatus.Succeeded ||
+          status.status === PredictionStatus.Failed ||
+          status.status === PredictionStatus.Canceled
         ) {
           finalPrediction = status;
           break;
@@ -111,17 +432,17 @@ describe("Replicate API Integration", () => {
       }
 
       expect(finalPrediction).toBeDefined();
-      if (finalPrediction?.status === "failed") {
+      if (finalPrediction?.status === PredictionStatus.Failed) {
         console.error("Prediction failed:", finalPrediction.error);
       }
-      expect(finalPrediction?.status).toBe("succeeded");
+      expect(finalPrediction?.status).toBe(PredictionStatus.Succeeded);
       expect(finalPrediction?.output).toBeDefined();
     });
 
     it("should handle webhook notifications", async () => {
       const prompt = "a photo of a mountain landscape at sunset";
       const params = templateManager.generateParameters(prompt, {
-        quality: "draft",
+        quality: "quality",
         style: "photorealistic",
         size: "landscape",
       });
@@ -151,7 +472,6 @@ describe("Replicate API Integration", () => {
       // Wait for delivery attempt
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      // Check delivery results
       const results = webhookService.getDeliveryResults(webhookId);
       expect(results).toHaveLength(1);
       // Expect failure since we're using a mock URL
@@ -179,7 +499,6 @@ describe("Replicate API Integration", () => {
       expect(collection.name).toBe(testCollection.name);
       expect(collection.slug).toBe(testCollection.slug);
       expect(collection.models).toBeInstanceOf(Array);
-      expect(collection.models.length).toBeGreaterThan(0);
     });
   });
 

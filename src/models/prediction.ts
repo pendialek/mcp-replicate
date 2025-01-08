@@ -5,12 +5,13 @@
 /**
  * Status of a prediction.
  */
-export type PredictionStatus =
-  | "starting"
-  | "processing"
-  | "succeeded"
-  | "failed"
-  | "canceled";
+export enum PredictionStatus {
+  Starting = "starting",
+  Processing = "processing",
+  Succeeded = "succeeded",
+  Failed = "failed",
+  Canceled = "canceled",
+}
 
 /**
  * Model input/output types
@@ -48,7 +49,7 @@ export interface Prediction {
   /** Model version used for this prediction */
   version: string;
   /** Current status of the prediction */
-  status: PredictionStatus;
+  status: PredictionStatus | string;
   /** Input parameters used for the prediction */
   input: ModelIO;
   /** Output from the prediction if completed */

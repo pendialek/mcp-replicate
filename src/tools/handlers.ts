@@ -4,11 +4,8 @@
 
 import type { ReplicateClient } from "../replicate_client.js";
 import type { Model } from "../models/model.js";
-import type {
-  ModelIO,
-  Prediction,
-  PredictionStatus,
-} from "../models/prediction.js";
+import type { ModelIO, Prediction } from "../models/prediction.js";
+import { PredictionStatus } from "../models/prediction.js";
 import type { Collection } from "../models/collection.js";
 import type { SSEServerTransport } from "../transport/sse.js";
 import {
@@ -251,11 +248,14 @@ export async function handleCreatePrediction(
 
     // Cache the prediction and its initial status
     cache.predictionCache.set(prediction.id, prediction);
-    cache.predictionStatus.set(prediction.id, prediction.status);
+    cache.predictionStatus.set(
+      prediction.id,
+      prediction.status as PredictionStatus
+    );
 
     // Send initial status notification
     await transport.notify(
-      createPredictionStatusNotification(prediction, "starting")
+      createPredictionStatusNotification(prediction, PredictionStatus.Starting)
     );
 
     // Start polling for updates
@@ -273,7 +273,7 @@ export async function handleCreatePrediction(
         if (previousStatus && updatedPrediction.status !== previousStatus) {
           cache.predictionStatus.set(
             updatedPrediction.id,
-            updatedPrediction.status
+            updatedPrediction.status as PredictionStatus
           );
           await transport.notify(
             createPredictionStatusNotification(
@@ -283,7 +283,7 @@ export async function handleCreatePrediction(
           );
 
           // Send progress notification if processing
-          if (updatedPrediction.status === "processing") {
+          if (updatedPrediction.status === PredictionStatus.Processing) {
             const progress = estimateProgress(updatedPrediction);
             await transport.notify(
               createPredictionProgressNotification(updatedPrediction, progress)
@@ -292,15 +292,15 @@ export async function handleCreatePrediction(
 
           // Stop polling if in terminal state
           if (
-            updatedPrediction.status === "succeeded" ||
-            updatedPrediction.status === "failed" ||
-            updatedPrediction.status === "canceled"
+            updatedPrediction.status === PredictionStatus.Succeeded ||
+            updatedPrediction.status === PredictionStatus.Failed ||
+            updatedPrediction.status === PredictionStatus.Canceled
           ) {
             clearInterval(pollInterval);
 
             // Send error notification if failed
             if (
-              updatedPrediction.status === "failed" &&
+              updatedPrediction.status === PredictionStatus.Failed &&
               updatedPrediction.error
             ) {
               await transport.notify(
@@ -354,7 +354,10 @@ export async function handleCancelPrediction(
 
     // Update cache
     cache.predictionCache.set(prediction.id, prediction);
-    cache.predictionStatus.set(prediction.id, prediction.status);
+    cache.predictionStatus.set(
+      prediction.id,
+      prediction.status as PredictionStatus
+    );
 
     // Send status notification
     if (previousStatus) {
@@ -454,7 +457,10 @@ export async function handleGetPrediction(
 
     // Update cache
     cache.predictionCache.set(prediction.id, prediction);
-    cache.predictionStatus.set(prediction.id, prediction.status);
+    cache.predictionStatus.set(
+      prediction.id,
+      prediction.status as PredictionStatus
+    );
 
     // Send status notification if changed
     if (previousStatus && prediction.status !== previousStatus) {
@@ -463,7 +469,7 @@ export async function handleGetPrediction(
       );
 
       // Send error notification if failed
-      if (prediction.status === "failed" && prediction.error) {
+      if (prediction.status === PredictionStatus.Failed && prediction.error) {
         await transport.notify(
           createPredictionErrorNotification(prediction, prediction.error)
         );
@@ -526,10 +532,13 @@ export async function handleGetPrediction(
  * Estimate prediction progress based on logs and status.
  */
 function estimateProgress(prediction: Prediction): number {
-  if (prediction.status === "succeeded") return 100;
-  if (prediction.status === "failed" || prediction.status === "canceled")
+  if (prediction.status === PredictionStatus.Succeeded) return 100;
+  if (
+    prediction.status === PredictionStatus.Failed ||
+    prediction.status === PredictionStatus.Canceled
+  )
     return 0;
-  if (prediction.status === "starting") return 0;
+  if (prediction.status === PredictionStatus.Starting) return 0;
 
   // Try to parse progress from logs
   if (prediction.logs) {
@@ -540,7 +549,7 @@ function estimateProgress(prediction: Prediction): number {
   }
 
   // Default to 50% if processing but no specific progress info
-  return prediction.status === "processing" ? 50 : 0;
+  return prediction.status === PredictionStatus.Processing ? 50 : 0;
 }
 
 export async function handleListPredictions(
@@ -558,7 +567,10 @@ export async function handleListPredictions(
     for (const prediction of predictions) {
       const previousStatus = cache.predictionStatus.get(prediction.id);
       cache.predictionCache.set(prediction.id, prediction);
-      cache.predictionStatus.set(prediction.id, prediction.status);
+      cache.predictionStatus.set(
+        prediction.id,
+        prediction.status as PredictionStatus
+      );
 
       // Send notifications for status changes
       if (previousStatus && prediction.status !== previousStatus) {
@@ -566,7 +578,7 @@ export async function handleListPredictions(
           createPredictionStatusNotification(prediction, previousStatus)
         );
 
-        if (prediction.status === "failed" && prediction.error) {
+        if (prediction.status === PredictionStatus.Failed && prediction.error) {
           await transport.notify(
             createPredictionErrorNotification(prediction, prediction.error)
           );
