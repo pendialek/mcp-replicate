@@ -1,26 +1,54 @@
 {
-  "name": "mcp-server-replicate",
+  "name": "mcp-replicate",
   "version": "0.1.0",
-  "description": "Model Context Protocol server for Replicate",
+  "description": "MCP server implementation for Replicate",
   "type": "module",
-  "bin": {
-    "replicate": "./build/index.js"
-  },
-  "files": [
-    "build"
-  ],
+  "main": "build/index.js",
   "scripts": {
-    "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
-    "prepare": "npm run build",
-    "watch": "tsc --watch",
-    "inspector": "npx @modelcontextprotocol/inspector build/index.js"
+    "build": "tsc",
+    "start": "node build/index.js",
+    "dev": "tsc -w",
+    "test": "vitest",
+    "test:watch": "vitest watch",
+    "test:coverage": "vitest run --coverage",
+    "lint": "biome check .",
+    "format": "biome format . --write"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^0.6.0",
-    "replicate": "^1.0.1"
+    "@modelcontextprotocol/sdk": "^0.1.0",
+    "replicate": "^0.25.1"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
+    "@biomejs/biome": "^1.5.3",
+    "@types/node": "^20.11.5",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "vitest": {
+    "include": [
+      "src/**/*.test.ts"
+    ],
+    "exclude": [
+      "node_modules",
+      "build"
+    ],
+    "environment": "node",
+    "testTimeout": 10000,
+    "coverage": {
+      "provider": "v8",
+      "reporter": [
+        "text",
+        "html"
+      ],
+      "exclude": [
+        "node_modules",
+        "build",
+        "**/*.test.ts",
+        "**/*.d.ts"
+      ]
+    }
   }
 }

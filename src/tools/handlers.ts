@@ -4,8 +4,18 @@
 
 import type { ReplicateClient } from "../replicate_client.js";
 import type { Model } from "../models/model.js";
-import type { ModelIO, Prediction } from "../models/prediction.js";
+import type {
+  ModelIO,
+  Prediction,
+  PredictionStatus,
+} from "../models/prediction.js";
 import type { Collection } from "../models/collection.js";
+import type { SSEServerTransport } from "../transport/sse.js";
+import {
+  createPredictionStatusNotification,
+  createPredictionErrorNotification,
+  createPredictionProgressNotification,
+} from "../models/notification.js";
 
 /**
  * Cache for models, predictions, and collections.
@@ -14,6 +24,7 @@ interface Cache {
   modelCache: Map<string, Model>;
   predictionCache: Map<string, Prediction>;
   collectionCache: Map<string, Collection>;
+  predictionStatus: Map<string, PredictionStatus>;
 }
 
 /**
@@ -225,6 +236,7 @@ export async function handleGetCollection(
 export async function handleCreatePrediction(
   client: ReplicateClient,
   cache: Cache,
+  transport: SSEServerTransport,
   args: { version: string; input: ModelIO | string; webhook?: string }
 ) {
   try {
@@ -237,8 +249,73 @@ export async function handleCreatePrediction(
       input,
     });
 
-    // Cache the prediction
+    // Cache the prediction and its initial status
     cache.predictionCache.set(prediction.id, prediction);
+    cache.predictionStatus.set(prediction.id, prediction.status);
+
+    // Send initial status notification
+    await transport.notify(
+      createPredictionStatusNotification(prediction, "starting")
+    );
+
+    // Start polling for updates
+    const pollInterval = setInterval(async () => {
+      try {
+        const updatedPrediction = await client.getPredictionStatus(
+          prediction.id
+        );
+        const previousStatus = cache.predictionStatus.get(prediction.id);
+
+        // Update cache
+        cache.predictionCache.set(updatedPrediction.id, updatedPrediction);
+
+        // Check for status changes
+        if (previousStatus && updatedPrediction.status !== previousStatus) {
+          cache.predictionStatus.set(
+            updatedPrediction.id,
+            updatedPrediction.status
+          );
+          await transport.notify(
+            createPredictionStatusNotification(
+              updatedPrediction,
+              previousStatus
+            )
+          );
+
+          // Send progress notification if processing
+          if (updatedPrediction.status === "processing") {
+            const progress = estimateProgress(updatedPrediction);
+            await transport.notify(
+              createPredictionProgressNotification(updatedPrediction, progress)
+            );
+          }
+
+          // Stop polling if in terminal state
+          if (
+            updatedPrediction.status === "succeeded" ||
+            updatedPrediction.status === "failed" ||
+            updatedPrediction.status === "canceled"
+          ) {
+            clearInterval(pollInterval);
+
+            // Send error notification if failed
+            if (
+              updatedPrediction.status === "failed" &&
+              updatedPrediction.error
+            ) {
+              await transport.notify(
+                createPredictionErrorNotification(
+                  updatedPrediction,
+                  updatedPrediction.error
+                )
+              );
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error polling prediction status:", error);
+      }
+    }, 1000); // Poll every second
 
     return {
       content: [
@@ -267,13 +344,24 @@ export async function handleCreatePrediction(
 export async function handleCancelPrediction(
   client: ReplicateClient,
   cache: Cache,
+  transport: SSEServerTransport,
   args: { prediction_id: string }
 ) {
   try {
     const prediction = await client.cancelPrediction(args.prediction_id);
 
+    const previousStatus = cache.predictionStatus.get(prediction.id);
+
     // Update cache
     cache.predictionCache.set(prediction.id, prediction);
+    cache.predictionStatus.set(prediction.id, prediction.status);
+
+    // Send status notification
+    if (previousStatus) {
+      await transport.notify(
+        createPredictionStatusNotification(prediction, previousStatus)
+      );
+    }
 
     return {
       content: [
@@ -356,13 +444,31 @@ export async function handleGetModel(
 export async function handleGetPrediction(
   client: ReplicateClient,
   cache: Cache,
+  transport: SSEServerTransport,
   args: { prediction_id: string }
 ) {
   try {
     const prediction = await client.getPredictionStatus(args.prediction_id);
 
+    const previousStatus = cache.predictionStatus.get(prediction.id);
+
     // Update cache
     cache.predictionCache.set(prediction.id, prediction);
+    cache.predictionStatus.set(prediction.id, prediction.status);
+
+    // Send status notification if changed
+    if (previousStatus && prediction.status !== previousStatus) {
+      await transport.notify(
+        createPredictionStatusNotification(prediction, previousStatus)
+      );
+
+      // Send error notification if failed
+      if (prediction.status === "failed" && prediction.error) {
+        await transport.notify(
+          createPredictionErrorNotification(prediction, prediction.error)
+        );
+      }
+    }
 
     return {
       content: [
@@ -416,9 +522,31 @@ export async function handleGetPrediction(
 /**
  * Handle the list_predictions tool.
  */
+/**
+ * Estimate prediction progress based on logs and status.
+ */
+function estimateProgress(prediction: Prediction): number {
+  if (prediction.status === "succeeded") return 100;
+  if (prediction.status === "failed" || prediction.status === "canceled")
+    return 0;
+  if (prediction.status === "starting") return 0;
+
+  // Try to parse progress from logs
+  if (prediction.logs) {
+    const match = prediction.logs.match(/progress: (\d+)%/);
+    if (match) {
+      return Number.parseInt(match[1], 10);
+    }
+  }
+
+  // Default to 50% if processing but no specific progress info
+  return prediction.status === "processing" ? 50 : 0;
+}
+
 export async function handleListPredictions(
   client: ReplicateClient,
   cache: Cache,
+  transport: SSEServerTransport,
   args: { limit?: number; cursor?: string }
 ) {
   try {
@@ -426,9 +554,24 @@ export async function handleListPredictions(
       limit: args.limit || 10,
     });
 
-    // Update cache
+    // Update cache and status tracking
     for (const prediction of predictions) {
+      const previousStatus = cache.predictionStatus.get(prediction.id);
       cache.predictionCache.set(prediction.id, prediction);
+      cache.predictionStatus.set(prediction.id, prediction.status);
+
+      // Send notifications for status changes
+      if (previousStatus && prediction.status !== previousStatus) {
+        await transport.notify(
+          createPredictionStatusNotification(prediction, previousStatus)
+        );
+
+        if (prediction.status === "failed" && prediction.error) {
+          await transport.notify(
+            createPredictionErrorNotification(prediction, prediction.error)
+          );
+        }
+      }
     }
 
     // Format predictions as text

@@ -1,56 +1,127 @@
 /**
- * Data models for Replicate webhooks.
+ * Webhook types and utilities.
  */
 
-import type { Prediction } from "./prediction.js";
+import crypto from "node:crypto";
 
-/**
- * Types of events that can trigger webhooks.
- */
-export type WebhookEventType = "start" | "output" | "logs" | "completed";
-
-/**
- * Event-specific data payloads
- */
-export interface WebhookEventData {
-  start: {
-    status: "starting";
-  };
-  output: {
-    status: "processing" | "succeeded";
-    output?: unknown;
-  };
-  logs: {
-    status: "processing";
-    logs: string;
-  };
-  completed: {
-    status: "succeeded" | "failed" | "canceled";
-    output?: unknown;
-    error?: string;
-  };
+export interface WebhookConfig {
+  url: string;
+  secret?: string;
+  retries?: number;
+  timeout?: number;
 }
 
-/**
- * A webhook event from Replicate.
- */
 export interface WebhookEvent {
-  /** Type of webhook event */
   type: WebhookEventType;
-  /** ID of the prediction that triggered this event */
-  prediction_id: string;
-  /** When this event occurred */
   timestamp: string;
-  /** Event-specific data payload */
-  data: WebhookEventData[keyof WebhookEventData];
+  data: Record<string, unknown>;
+}
+
+export type WebhookEventType =
+  | "prediction.created"
+  | "prediction.processing"
+  | "prediction.succeeded"
+  | "prediction.failed"
+  | "prediction.canceled";
+
+export interface WebhookDeliveryResult {
+  success: boolean;
+  statusCode?: number;
+  error?: string;
+  retryCount: number;
+  timestamp: string;
 }
 
 /**
- * The full payload of a webhook request.
+ * Generate a webhook signature for request verification.
  */
-export interface WebhookPayload {
-  /** The webhook event */
-  event: WebhookEvent;
-  /** Full prediction object at time of event */
-  prediction: Prediction;
+export function generateWebhookSignature(
+  payload: string,
+  secret: string
+): string {
+  const hmac = crypto.createHmac("sha256", secret);
+  hmac.update(payload);
+  return `sha256=${hmac.digest("hex")}`;
+}
+
+/**
+ * Verify a webhook signature from request headers.
+ */
+export function verifyWebhookSignature(
+  payload: string,
+  signature: string,
+  secret: string
+): boolean {
+  const expectedSignature = generateWebhookSignature(payload, secret);
+  return crypto.timingSafeEqual(
+    Buffer.from(signature),
+    Buffer.from(expectedSignature)
+  );
+}
+
+/**
+ * Format a webhook event payload.
+ */
+export function formatWebhookEvent(
+  type: WebhookEventType,
+  data: Record<string, unknown>
+): WebhookEvent {
+  return {
+    type,
+    timestamp: new Date().toISOString(),
+    data,
+  };
+}
+
+/**
+ * Validate webhook configuration.
+ */
+export function validateWebhookConfig(config: WebhookConfig): string[] {
+  const errors: string[] = [];
+
+  // Validate URL
+  try {
+    new URL(config.url);
+  } catch {
+    errors.push("Invalid webhook URL");
+  }
+
+  // Validate secret
+  if (config.secret && config.secret.length < 32) {
+    errors.push("Webhook secret should be at least 32 characters long");
+  }
+
+  // Validate retries
+  if (config.retries !== undefined) {
+    if (!Number.isInteger(config.retries) || config.retries < 0) {
+      errors.push("Retries must be a non-negative integer");
+    }
+  }
+
+  // Validate timeout
+  if (config.timeout !== undefined) {
+    if (!Number.isInteger(config.timeout) || config.timeout < 1000) {
+      errors.push("Timeout must be at least 1000ms");
+    }
+  }
+
+  return errors;
+}
+
+/**
+ * Default webhook configuration.
+ */
+export const DEFAULT_WEBHOOK_CONFIG: Partial<WebhookConfig> = {
+  retries: 3,
+  timeout: 10000, // 10 seconds
+};
+
+/**
+ * Retry delay calculator with exponential backoff.
+ */
+export function calculateRetryDelay(attempt: number, baseDelay = 1000): number {
+  const maxDelay = 60000; // 1 minute
+  const delay = Math.min(baseDelay * 2 ** attempt, maxDelay);
+  // Add jitter to prevent thundering herd
+  return delay + Math.random() * 1000;
 }

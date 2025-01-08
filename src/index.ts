@@ -18,8 +18,13 @@ import {
 
 import { ReplicateClient } from "./replicate_client.js";
 import type { Model } from "./models/model.js";
-import type { Prediction, ModelIO } from "./models/prediction.js";
+import type {
+  Prediction,
+  ModelIO,
+  PredictionStatus,
+} from "./models/prediction.js";
 import type { Collection } from "./models/collection.js";
+import { SSEServerTransport } from "./transport/sse.js";
 
 import { tools } from "./tools/index.js";
 import {
@@ -37,17 +42,22 @@ import {
 // Initialize Replicate client
 const client = new ReplicateClient();
 
-// Cache for models, predictions, and collections to avoid excessive API calls
+// Cache for models, predictions, collections, and prediction status
 const modelCache = new Map<string, Model>();
 const predictionCache = new Map<string, Prediction>();
 const collectionCache = new Map<string, Collection>();
+const predictionStatus = new Map<string, PredictionStatus>();
 
 // Cache object for tool handlers
 const cache = {
   modelCache,
   predictionCache,
   collectionCache,
+  predictionStatus,
 };
+
+// Initialize SSE transport
+const sseTransport = new SSEServerTransport();
 
 /**
  * Create an MCP server with capabilities for resources (models and predictions),
@@ -245,24 +255,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
 
     case "create_prediction":
-      return handleCreatePrediction(client, cache, {
+      return handleCreatePrediction(client, cache, sseTransport, {
         version: String(request.params.arguments?.version),
         input: request.params.arguments?.input as ModelIO,
         webhook: request.params.arguments?.webhook_url as string | undefined,
       });
 
     case "cancel_prediction":
-      return handleCancelPrediction(client, cache, {
+      return handleCancelPrediction(client, cache, sseTransport, {
         prediction_id: String(request.params.arguments?.prediction_id),
       });
 
     case "get_prediction":
-      return handleGetPrediction(client, cache, {
+      return handleGetPrediction(client, cache, sseTransport, {
         prediction_id: String(request.params.arguments?.prediction_id),
       });
 
     case "list_predictions":
-      return handleListPredictions(client, cache, {
+      return handleListPredictions(client, cache, sseTransport, {
         limit: request.params.arguments?.limit as number | undefined,
         cursor: request.params.arguments?.cursor as string | undefined,
       });
