@@ -16,6 +16,17 @@ import {
   predictionCache,
   collectionCache,
 } from "./services/cache.js";
+import {
+  ReplicateError,
+  RateLimitExceeded,
+  AuthenticationError,
+  NotFoundError,
+  APIError,
+  PredictionError,
+  ValidationError,
+  TimeoutError,
+  ErrorHandler,
+} from "./services/error.js";
 
 // Constants
 const REPLICATE_API_BASE = "https://api.replicate.com/v1";
@@ -62,88 +73,6 @@ interface ReplicatePage<T> {
   next?: string;
   previous?: string;
   total?: number;
-}
-
-/**
- * Base class for Replicate API errors.
- */
-export class ReplicateError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ReplicateError";
-  }
-}
-
-/**
- * Error thrown when rate limit is exceeded.
- */
-export class RateLimitExceeded extends ReplicateError {
-  constructor(public retry_after: number) {
-    super(`Rate limit exceeded. Retry after ${retry_after} seconds.`);
-    this.name = "RateLimitExceeded";
-  }
-}
-
-/**
- * Error thrown when authentication fails.
- */
-export class AuthenticationError extends ReplicateError {
-  constructor() {
-    super("Invalid or missing API token");
-    this.name = "AuthenticationError";
-  }
-}
-
-/**
- * Error thrown when a resource is not found.
- */
-export class NotFoundError extends ReplicateError {
-  constructor(resource: string) {
-    super(`Resource not found: ${resource}`);
-    this.name = "NotFoundError";
-  }
-}
-
-/**
- * Error thrown when the API request fails.
- */
-export class APIError extends ReplicateError {
-  constructor(public status: number, public code: string, message: string) {
-    super(`API error (${status}): ${message}`);
-    this.name = "APIError";
-  }
-}
-
-/**
- * Helper to handle API errors consistently.
- */
-function handleAPIError(error: unknown): never {
-  if (error instanceof ReplicateError) {
-    throw error;
-  }
-
-  if (error instanceof Response) {
-    if (error.status === 401) {
-      throw new AuthenticationError();
-    }
-    if (error.status === 404) {
-      throw new NotFoundError(error.url);
-    }
-    if (error.status === 429) {
-      const retryAfter = Number.parseInt(
-        error.headers.get("retry-after") || "60",
-        10
-      );
-      throw new RateLimitExceeded(retryAfter);
-    }
-    throw new APIError(error.status, error.statusText, "Request failed");
-  }
-
-  if (error instanceof Error) {
-    throw new ReplicateError(error.message);
-  }
-
-  throw new ReplicateError("Unknown error occurred");
 }
 
 /**
@@ -195,6 +124,9 @@ export class ReplicateClient {
   private async handleResponse(response: Response): Promise<void> {
     // Update rate limit from headers if available
     const limit = response.headers.get("X-RateLimit-Limit");
+    const remaining = response.headers.get("X-RateLimit-Remaining");
+    const reset = response.headers.get("X-RateLimit-Reset");
+
     if (limit) {
       this.rate_limit = Number.parseInt(limit, 10);
     }
@@ -205,7 +137,11 @@ export class ReplicateClient {
         response.headers.get("Retry-After") || "60",
         10
       );
-      throw new RateLimitExceeded(retry_after);
+      throw new RateLimitExceeded(
+        retry_after,
+        remaining ? Number.parseInt(remaining, 10) : undefined,
+        reset ? new Date(Number.parseInt(reset, 10) * 1000) : undefined
+      );
     }
   }
 
@@ -219,8 +155,8 @@ export class ReplicateClient {
   ): Promise<T> {
     await this.waitForRateLimit();
 
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
+    return ErrorHandler.withRetries(
+      async () => {
         const response = await fetch(`${REPLICATE_API_BASE}${endpoint}`, {
           method,
           headers: {
@@ -235,44 +171,23 @@ export class ReplicateClient {
         await this.handleResponse(response);
 
         if (!response.ok) {
-          handleAPIError(response);
+          throw ErrorHandler.parseAPIError(response);
         }
 
-        this.retry_count = 0; // Reset on success
-        return await response.json();
-      } catch (error) {
-        if (error instanceof RateLimitExceeded) {
+        return response.json();
+      },
+      {
+        max_attempts: MAX_RETRIES,
+        min_delay: MIN_RETRY_DELAY,
+        max_delay: MAX_RETRY_DELAY,
+        on_retry: (error, attempt) => {
           console.warn(
-            `Rate limit exceeded. Waiting ${error.retry_after} seconds`
+            `Request failed: ${error.message}. `,
+            `Retrying (attempt ${attempt + 1}/${MAX_RETRIES})`
           );
-          await new Promise((resolve) =>
-            setTimeout(resolve, error.retry_after * 1000)
-          );
-          continue;
-        }
-
-        this.retry_count++;
-        if (attempt === MAX_RETRIES - 1) {
-          handleAPIError(error);
-        }
-
-        // Calculate exponential backoff with jitter
-        const delay = Math.min(
-          MAX_RETRY_DELAY,
-          MIN_RETRY_DELAY * 2 ** attempt + Math.random() * 1000
-        );
-
-        console.warn(
-          `Request failed: ${error}. `,
-          `Retrying in ${delay}ms `,
-          `(attempt ${attempt + 1}/${MAX_RETRIES})`
-        );
-
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        },
       }
-    }
-
-    throw new Error("Request failed after max retries");
+    );
   }
 
   /**
@@ -389,7 +304,7 @@ export class ReplicateClient {
       modelCache.set(cacheKey, result);
       return result;
     } catch (error) {
-      handleAPIError(error);
+      throw ErrorHandler.parseAPIError(error as Response);
     }
   }
 
@@ -450,7 +365,7 @@ export class ReplicateClient {
       modelCache.set(cacheKey, result);
       return result;
     } catch (error) {
-      handleAPIError(error);
+      throw ErrorHandler.parseAPIError(error as Response);
     }
   }
 
@@ -532,7 +447,7 @@ export class ReplicateClient {
       collectionCache.set(cacheKey, result);
       return result;
     } catch (error) {
-      handleAPIError(error);
+      throw ErrorHandler.parseAPIError(error as Response);
     }
   }
 
@@ -594,7 +509,7 @@ export class ReplicateClient {
       collectionCache.set(cacheKey, result);
       return result;
     } catch (error) {
-      handleAPIError(error);
+      throw ErrorHandler.parseAPIError(error as Response);
     }
   }
 
@@ -639,7 +554,7 @@ export class ReplicateClient {
       predictionCache.set(`prediction:${prediction.id}`, result);
       return result;
     } catch (error) {
-      handleAPIError(error);
+      throw ErrorHandler.parseAPIError(error as Response);
     }
   }
 
@@ -686,7 +601,7 @@ export class ReplicateClient {
 
       return result;
     } catch (error) {
-      handleAPIError(error);
+      throw ErrorHandler.parseAPIError(error as Response);
     }
   }
 
@@ -694,29 +609,33 @@ export class ReplicateClient {
    * Cancel a running prediction.
    */
   async cancelPrediction(prediction_id: string): Promise<Prediction> {
-    const response = await this.makeRequest<ReplicatePrediction>(
-      "POST",
-      `/predictions/${prediction_id}/cancel`
-    );
+    try {
+      const response = await this.makeRequest<ReplicatePrediction>(
+        "POST",
+        `/predictions/${prediction_id}/cancel`
+      );
 
-    const result = {
-      id: response.id,
-      version: response.version,
-      status: response.status as PredictionStatus,
-      input: response.input as ModelIO,
-      output: response.output as ModelIO | undefined,
-      error: response.error ? String(response.error) : undefined,
-      logs: response.logs,
-      created_at: response.created_at,
-      started_at: response.started_at,
-      completed_at: response.completed_at,
-      urls: response.urls,
-      metrics: response.metrics,
-    };
+      const result = {
+        id: response.id,
+        version: response.version,
+        status: response.status as PredictionStatus,
+        input: response.input as ModelIO,
+        output: response.output as ModelIO | undefined,
+        error: response.error ? String(response.error) : undefined,
+        logs: response.logs,
+        created_at: response.created_at,
+        started_at: response.started_at,
+        completed_at: response.completed_at,
+        urls: response.urls,
+        metrics: response.metrics,
+      };
 
-    // Update cache
-    predictionCache.set(`prediction:${prediction_id}`, result);
-    return result;
+      // Update cache
+      predictionCache.set(`prediction:${prediction_id}`, result);
+      return result;
+    } catch (error) {
+      throw ErrorHandler.parseAPIError(error as Response);
+    }
   }
 
   /**
@@ -771,7 +690,7 @@ export class ReplicateClient {
       predictionCache.set(cacheKey, result);
       return result;
     } catch (error) {
-      handleAPIError(error);
+      throw ErrorHandler.parseAPIError(error as Response);
     }
   }
 
@@ -832,7 +751,7 @@ export class ReplicateClient {
       modelCache.set(cacheKey, result);
       return result;
     } catch (error) {
-      handleAPIError(error);
+      throw ErrorHandler.parseAPIError(error as Response);
     }
   }
 
