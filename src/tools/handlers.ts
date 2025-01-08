@@ -142,8 +142,9 @@ export async function handleListCollections(
         },
         ...result.collections.map((collection: Collection) => ({
           type: "text" as const,
-          text: `- ${collection.name}: ${
-            collection.description || `A collection of ${collection.models.length} models`
+          text: `- ${collection.name} (slug: ${collection.slug}): ${
+            collection.description ||
+            `A collection of ${collection.models.length} models`
           }`,
         })),
         result.next_cursor
@@ -224,10 +225,17 @@ export async function handleGetCollection(
 export async function handleCreatePrediction(
   client: ReplicateClient,
   cache: Cache,
-  args: { version: string; input: ModelIO; webhook?: string }
+  args: { version: string; input: ModelIO | string; webhook?: string }
 ) {
   try {
-    const prediction = await client.createPrediction(args);
+    // If input is a string, wrap it in an object with 'text' property
+    const input =
+      typeof args.input === "string" ? { text: args.input } : args.input;
+
+    const prediction = await client.createPrediction({
+      ...args,
+      input,
+    });
 
     // Cache the prediction
     cache.predictionCache.set(prediction.id, prediction);
@@ -289,6 +297,60 @@ export async function handleCancelPrediction(
 }
 
 /**
+ * Handle the get_model tool.
+ */
+export async function handleGetModel(
+  client: ReplicateClient,
+  cache: Cache,
+  args: { owner: string; name: string }
+) {
+  try {
+    const model = await client.getModel(args.owner, args.name);
+
+    // Update cache
+    cache.modelCache.set(`${model.owner}/${model.name}`, model);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Model: ${model.owner}/${model.name}`,
+        },
+        model.description
+          ? {
+              type: "text" as const,
+              text: `\nDescription: ${model.description}`,
+            }
+          : null,
+        {
+          type: "text",
+          text: "\nLatest version:",
+        },
+        model.latest_version
+          ? {
+              type: "text" as const,
+              text: `ID: ${model.latest_version.id}\nCreated: ${model.latest_version.created_at}`,
+            }
+          : {
+              type: "text" as const,
+              text: "No versions available",
+            },
+      ].filter(Boolean),
+    };
+  } catch (error) {
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `Error getting model: ${getErrorMessage(error)}`,
+        },
+      ],
+    };
+  }
+}
+
+/**
  * Handle the get_prediction tool.
  */
 export async function handleGetPrediction(
@@ -309,10 +371,34 @@ export async function handleGetPrediction(
           text: `Prediction ${prediction.id}:`,
         },
         {
-          type: "json",
-          json: prediction,
+          type: "text",
+          text: `Status: ${prediction.status}\nModel version: ${prediction.version}\nCreated: ${prediction.created_at}`,
         },
-      ],
+        prediction.input
+          ? {
+              type: "text" as const,
+              text: `\nInput:\n${JSON.stringify(prediction.input, null, 2)}`,
+            }
+          : null,
+        prediction.output
+          ? {
+              type: "text" as const,
+              text: `\nOutput:\n${JSON.stringify(prediction.output, null, 2)}`,
+            }
+          : null,
+        prediction.error
+          ? {
+              type: "text" as const,
+              text: `\nError: ${prediction.error}`,
+            }
+          : null,
+        prediction.logs
+          ? {
+              type: "text" as const,
+              text: `\nLogs:\n${prediction.logs}`,
+            }
+          : null,
+      ].filter(Boolean),
     };
   } catch (error) {
     return {
@@ -376,4 +462,4 @@ export async function handleListPredictions(
       ],
     };
   }
-} 
+}

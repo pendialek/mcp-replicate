@@ -31,6 +31,7 @@ import {
   handleCancelPrediction,
   handleGetPrediction,
   handleListPredictions,
+  handleGetModel,
 } from "./tools/handlers.js";
 
 // Initialize Replicate client
@@ -83,7 +84,7 @@ const server = new Server(
  * - A replicate-prediction:// URI scheme
  * - application/json MIME type
  * - Human readable name and description
- * 
+ *
  * Each collection is exposed as a resource with:
  * - A replicate-collection:// URI scheme
  * - application/json MIME type
@@ -137,7 +138,8 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
       mimeType: "application/json",
       name: collection.name,
       description:
-        collection.description || `A collection of ${collection.models.length} models`,
+        collection.description ||
+        `A collection of ${collection.models.length} models`,
     })
   );
 
@@ -263,6 +265,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return handleListPredictions(client, cache, {
         limit: request.params.arguments?.limit as number | undefined,
         cursor: request.params.arguments?.cursor as string | undefined,
+      });
+
+    case "get_model":
+      return handleGetModel(client, cache, {
+        owner: String(request.params.arguments?.owner),
+        name: String(request.params.arguments?.name),
       });
 
     default:

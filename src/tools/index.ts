@@ -11,6 +11,7 @@ import {
   listModelsTool,
   listCollectionsTool,
   getCollectionTool,
+  getModelTool,
 } from "./models.js";
 import {
   createPredictionTool,
@@ -31,4 +32,5 @@ export const tools: Tool[] = [
   cancelPredictionTool,
   getPredictionTool,
   listPredictionsTool,
-]; 
+  getModelTool,
+];

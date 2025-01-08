@@ -78,4 +78,26 @@ export const getCollectionTool: Tool = {
     },
     required: ["slug"],
   },
-}; 
+};
+
+/**
+ * Tool for getting model details including versions.
+ */
+export const getModelTool: Tool = {
+  name: "get_model",
+  description: "Get details of a specific model including available versions",
+  inputSchema: {
+    type: "object",
+    properties: {
+      owner: {
+        type: "string",
+        description: "Model owner",
+      },
+      name: {
+        type: "string",
+        description: "Model name",
+      },
+    },
+    required: ["owner", "name"],
+  },
+};

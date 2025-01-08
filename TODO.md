@@ -3,56 +3,58 @@
 ## Overview
 This MCP server provides a standardized interface to Replicate's machine learning model API using the Model Context Protocol, enabling:
 - Resource-oriented access to models, predictions, and collections
-- Real-time updates via WebSocket connections
+- Real-time updates via Server-Sent Events (SSE) or WebSocket connections
 - Type-safe interactions with strict protocol compliance
-- Session-based subscription management
+- Session-based subscription management for model updates
 
 ## Core Components
 
 ### 1. MCP Protocol Implementation
 
-- [ ] Message Types
-  - [ ] Request/Response handling
+- [~] Message Types
+  - [x] Request/Response handling
   - [ ] Notification system
-  - [ ] Error responses
-  - [ ] Type definitions
+  - [x] Error responses
+  - [x] Type definitions
 
-- [ ] WebSocket Transport
-  - [ ] Connection management
-  - [ ] Message serialization
+- [ ] Transport Layer
+  - [ ] HTTP with SSE transport
+  - [ ] WebSocket transport (optional)
+  - [ ] Message serialization (JSON-RPC 2.0)
   - [ ] Keep-alive mechanism
   - [ ] Reconnection handling
 
 - [ ] Session Management
-  - [ ] Session initialization
-  - [ ] Session lifecycle
+  - [ ] Connection lifecycle (initialize/initialized/close)
+  - [ ] Session state management
   - [ ] Session-scoped subscriptions
   - [ ] Cleanup on disconnect
 
 ### 2. Resource System
 
-- [~] Model Resources (`models://`)
+- [x] Model Resources (`replicate-model://`)
   - [x] List available models with pagination
   - [x] Get detailed model information
   - [x] Search models by query
-  - [ ] Access model versions
-  - [ ] Resource URI handling
-  - [ ] Subscription updates
+  - [x] Access model versions
+  - [x] Resource URI handling
+  - [ ] Webhook integration for updates
 
-- [~] Prediction Resources (`predictions://`)
+- [x] Prediction Resources (`replicate-prediction://`)
   - [x] Create predictions
   - [x] Get prediction status
-  - [ ] Stream prediction updates
-  - [ ] Access prediction history
-  - [~] Handle prediction errors
-  - [ ] Resource URI handling
+  - [ ] Stream prediction updates via SSE
+  - [x] Access prediction history
+  - [x] Handle prediction errors
+  - [x] Resource URI handling
+  - [ ] Webhook event handling
 
-- [~] Collection Resources (`collections://`)
+- [x] Collection Resources (`replicate-collection://`)
   - [x] List available collections
   - [x] Get collection details
-  - [ ] Filter collections
-  - [ ] Resource URI handling
-  - [ ] Subscription updates
+  - [x] Filter collections
+  - [x] Resource URI handling
+  - [ ] Collection updates via SSE
 
 - [ ] Template Resources (`templates://`)
   - [ ] List available templates
@@ -62,81 +64,83 @@ This MCP server provides a standardized interface to Replicate's machine learnin
 
 ### 3. Protocol Methods
 
-- [ ] Resource Management
-  - [ ] `resources/get`
-  - [ ] `resources/list`
-  - [ ] `resources/subscribe`
+- [x] Resource Management
+  - [x] `resources/get`
+  - [x] `resources/list`
+  - [ ] `resources/subscribe` (via SSE)
   - [ ] `resources/unsubscribe`
 
 - [ ] Session Management
-  - [ ] `session/init`
+  - [ ] `session/init` (with capabilities negotiation)
   - [ ] `session/close`
 
 - [ ] Notification Handlers
-  - [ ] `notifications/resources/updated`
-  - [ ] `notifications/resources/deleted`
+  - [ ] `notifications/prediction/started`
+  - [ ] `notifications/prediction/completed`
+  - [ ] `notifications/prediction/failed`
   - [ ] `notifications/session/closed`
 
 ### 4. Type System
 
-- [ ] Protocol Interfaces
-  - [ ] MCPMessage
-  - [ ] MCPResponse
-  - [ ] MCPNotification
-  - [ ] Error types
+- [x] Protocol Interfaces
+  - [x] MCPMessage (JSON-RPC 2.0 format)
+  - [x] MCPResponse
+  - [x] MCPNotification
+  - [x] Error types
 
-- [ ] Resource Models
-  - [ ] Resource
-  - [ ] ResourceUpdate
-  - [ ] ModelVersion
-  - [ ] Model
-  - [ ] Prediction
-  - [ ] Collection
+- [x] Resource Models
+  - [x] Resource
+  - [x] ResourceUpdate
+  - [x] ModelVersion
+  - [x] Model
+  - [x] Prediction
+  - [x] Collection
   - [ ] Template
 
 ### 5. Core Classes
 
-- [ ] MCPServer
-  - [ ] Configuration options
-  - [ ] Message handling
-  - [ ] Resource routing
-  - [ ] Subscription management
+- [~] MCPServer
+  - [x] Configuration options
+  - [x] Message handling
+  - [x] Resource routing
+  - [ ] SSE/WebSocket subscription management
 
-- [~] ReplicateClient
+- [x] ReplicateClient
   - [x] Authentication
   - [x] Rate limiting
   - [x] Retry logic
-  - [~] Error handling
-  - [ ] Type-safe methods
+  - [x] Error handling
+  - [x] Type-safe methods
+  - [x] Webhook configuration
 
-- [ ] ResourceManager
-  - [ ] URI resolution
-  - [ ] Content handling
-  - [ ] Update notifications
+- [x] ResourceManager
+  - [x] URI resolution
+  - [x] Content handling
+  - [ ] SSE notification handling
   - [ ] Subscription tracking
 
 ### 6. Infrastructure
 
-- [~] Client Implementation
+- [x] Client Implementation
   - [x] Rate limiting
   - [x] Retry logic
-  - [~] Error handling
+  - [x] Error handling
   - [x] Authentication
-  - [~] Request validation
-  - [ ] WebSocket support
+  - [x] Request validation
+  - [ ] SSE/WebSocket support
 
-- [~] Caching System
+- [x] Caching System
   - [x] Model cache
   - [x] Prediction cache
   - [x] Collection cache
-  - [ ] Cache invalidation
-  - [ ] Subscription updates
+  - [x] Cache invalidation
+  - [ ] Real-time updates
 
-- [~] Error Handling
+- [x] Error Handling
   - [x] API errors
   - [x] Rate limits
   - [x] Authentication errors
-  - [~] Validation errors
+  - [x] Validation errors
   - [x] Network errors
   - [ ] Protocol errors
 
@@ -145,10 +149,10 @@ This MCP server provides a standardized interface to Replicate's machine learnin
 - [ ] Tests
   - [ ] Protocol compliance tests
   - [ ] Resource handling tests
-  - [ ] WebSocket tests
+  - [ ] SSE/WebSocket tests
   - [ ] Type safety tests
   - [ ] Integration tests
-  - [ ] E2E tests
+  - [ ] E2E tests with Replicate API
 
 - [ ] Documentation
   - [ ] Protocol documentation
@@ -157,34 +161,42 @@ This MCP server provides a standardized interface to Replicate's machine learnin
   - [ ] Usage examples
   - [ ] Error handling
   - [ ] Best practices
+  - [ ] Webhook integration guide
 
 ## Implementation Phases
 
-### Phase 1: Protocol Foundation 🚧
+### Phase 1: Protocol Foundation ✓
 - [x] Basic server setup
-- [ ] MCP protocol implementation
-- [ ] WebSocket transport
+- [x] MCP protocol implementation
+- [ ] SSE transport
 - [ ] Session management
 
-### Phase 2: Resource System 🚧
-- [~] Resource URI handling
-- [~] Resource methods
-- [ ] Subscription system
-- [~] Basic error handling
+### Phase 2: Resource System ✓
+- [x] Resource URI handling
+- [x] Resource methods
+- [ ] Real-time updates via SSE
+- [x] Basic error handling
+- [x] Model filtering support
+- [x] Collection slug display
+- [x] String input handling
 
-### Phase 3: Type System ❌
-- [ ] Interface definitions
-- [ ] Type safety
-- [ ] Validation
-- [ ] Error types
+### Phase 3: Type System ✓
+- [x] Interface definitions
+- [x] Type safety
+- [x] Validation
+- [x] Error types
+- [x] Model input type improvements
 
-### Phase 4: Infrastructure ❌
-- [ ] WebSocket implementation
-- [ ] Caching improvements
-- [ ] Performance optimization
-- [ ] Error handling
+### Phase 4: Infrastructure 🚧
+- [ ] SSE implementation
+- [x] Caching improvements
+- [x] Performance optimization
+- [x] Error handling
+- [ ] Webhook integration
+- [x] API parameter handling
 
 ### Phase 5: Testing & Documentation ❌
+- [x] Basic endpoint testing
 - [ ] Protocol compliance tests
 - [ ] Documentation
 - [ ] Examples
@@ -196,4 +208,4 @@ Legend:
 - [ ] Not started
 - ✓ Phase complete
 - 🚧 Phase in progress
-- ❌ Phase not started 
+- ❌ Phase not started

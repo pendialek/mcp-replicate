@@ -274,22 +274,58 @@ export class ReplicateClient {
    * List available models on Replicate with pagination.
    */
   async listModels(
-    options: {
-      owner?: string;
-      cursor?: string;
-    } = {}
+    options: { owner?: string; cursor?: string } = {}
   ): Promise<ModelList> {
     try {
-      // Build query parameters
+      if (options.owner) {
+        // If owner is specified, use search to find their models
+        const response = (await this.client.models.search(
+          `owner:${options.owner}`
+        )) as unknown as ReplicatePage<ReplicateModel>;
+
+        return {
+          models: response.results.map((model) => ({
+            id: `${model.owner}/${model.name}`,
+            owner: model.owner,
+            name: model.name,
+            description: model.description || "",
+            visibility: model.visibility || "public",
+            github_url: model.github_url,
+            paper_url: model.paper_url,
+            license_url: model.license_url,
+            run_count: model.run_count,
+            cover_image_url: model.cover_image_url,
+            default_example: model.default_example,
+            featured: model.featured || false,
+            tags: model.tags || [],
+            latest_version: model.latest_version
+              ? {
+                  id: model.latest_version.id,
+                  created_at: model.latest_version.created_at,
+                  cog_version: model.latest_version.cog_version,
+                  openapi_schema: {
+                    ...model.latest_version.openapi_schema,
+                    openapi: "3.0.0",
+                    info: {
+                      title: `${model.owner}/${model.name}`,
+                      version: model.latest_version.id,
+                    },
+                    paths: {},
+                  },
+                }
+              : undefined,
+          })),
+          next_cursor: response.next,
+          total_count: response.total || response.results.length,
+        };
+      }
+
+      // Otherwise list all models
       const params = new URLSearchParams();
       if (options.cursor) {
         params.set("cursor", options.cursor);
       }
-      if (options.owner) {
-        params.set("username", options.owner); // The API expects 'username' not 'owner'
-      }
 
-      // Make direct request to support all parameters
       const response = await this.makeRequest<ReplicatePage<ReplicateModel>>(
         "GET",
         `/models${params.toString() ? `?${params.toString()}` : ""}`
@@ -508,14 +544,20 @@ export class ReplicateClient {
    */
   async createPrediction(options: {
     version: string;
-    input: ModelIO;
+    input: ModelIO | string;
     webhook?: string;
   }): Promise<Prediction> {
     try {
       // Use the official client for predictions
+      // If input is a string, wrap it in an object with 'text' property
+      const input =
+        typeof options.input === "string"
+          ? { text: options.input }
+          : options.input;
+
       const prediction = (await this.client.predictions.create({
         version: options.version,
-        input: options.input,
+        input,
         webhook: options.webhook,
       })) as unknown as ReplicatePrediction;
 
@@ -630,6 +672,58 @@ export class ReplicateClient {
         urls: prediction.urls,
         metrics: prediction.metrics,
       }));
+    } catch (error) {
+      handleAPIError(error);
+    }
+  }
+
+  /**
+   * Get details of a specific model including versions.
+   */
+  async getModel(owner: string, name: string): Promise<Model> {
+    try {
+      // Use direct API request to get model details
+      const response = await this.makeRequest<ReplicateModel>(
+        "GET",
+        `/models/${owner}/${name}`
+      );
+
+      // Get model versions
+      const versionsResponse = await this.makeRequest<
+        ReplicatePage<ModelVersion>
+      >("GET", `/models/${owner}/${name}/versions`);
+
+      const model: Model = {
+        id: `${response.owner}/${response.name}`,
+        owner: response.owner,
+        name: response.name,
+        description: response.description || "",
+        visibility: response.visibility || "public",
+        github_url: response.github_url,
+        paper_url: response.paper_url,
+        license_url: response.license_url,
+        run_count: response.run_count,
+        cover_image_url: response.cover_image_url,
+        default_example: response.default_example,
+        latest_version: versionsResponse.results[0]
+          ? {
+              id: versionsResponse.results[0].id,
+              created_at: versionsResponse.results[0].created_at,
+              cog_version: versionsResponse.results[0].cog_version,
+              openapi_schema: {
+                ...versionsResponse.results[0].openapi_schema,
+                openapi: "3.0.0",
+                info: {
+                  title: `${response.owner}/${response.name}`,
+                  version: versionsResponse.results[0].id,
+                },
+                paths: {},
+              },
+            }
+          : undefined,
+      };
+
+      return model;
     } catch (error) {
       handleAPIError(error);
     }

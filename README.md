@@ -5,18 +5,45 @@ A [Model Context Protocol](https://github.com/mcp-sdk/mcp) server implementation
 ## Features
 
 - **Resources**
-  - List available models on Replicate
-  - View model details and metadata
-  - List recent predictions
-  - View prediction status and results
+  - List and filter models by owner
+  - View model details including versions
+  - List recent predictions with status
+  - View prediction details and results
+  - Browse collections with slugs
 
 - **Tools**
-  - Create new predictions using any model version
+  - Search models by query or owner
+  - Create predictions with string or object input
   - Cancel running predictions
+  - Get model version details
+  - Access collections by slug
 
 - **Prompts**
   - Get help selecting appropriate models
   - Get parameter suggestions for models
+
+## Examples
+
+### List Models by Owner
+```typescript
+const models = await client.listModels({ owner: "stability-ai" });
+```
+
+### Create Prediction with String Input
+```typescript
+const prediction = await client.createPrediction({
+  version: "model_version_id",
+  input: "Your text prompt here" // Automatically wrapped in {text: string}
+});
+```
+
+### Get Collection by Slug
+```typescript
+// Get collection slug from list_collections
+const collections = await client.listCollections();
+// Use slug to get details
+const collection = await client.getCollection("text-to-speech");
+```
 
 ## Installation
 
