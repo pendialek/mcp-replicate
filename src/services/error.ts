@@ -295,21 +295,35 @@ export class ErrorHandler {
   /**
    * Create a detailed error report.
    */
-  static createErrorReport(error: Error): string {
-    const report = ["Error Report"];
-    report.push("=".repeat(40));
+  static createErrorReport(error: Error): {
+    name: string;
+    message: string;
+    context?: Record<string, unknown>;
+    environment: Record<string, unknown>;
+    timestamp: string;
+  } {
+    const timestamp = new Date().toISOString();
+    const environment = {
+      nodeVersion: process.version,
+      platform: process.platform,
+      arch: process.arch,
+    };
 
     if (error instanceof ReplicateError) {
-      report.push(error.getReport());
-    } else {
-      report.push(`Error: ${error.message}`);
-      if (error.stack) {
-        report.push("\nStack trace:", error.stack);
-      }
+      return {
+        name: error.name,
+        message: error.message,
+        context: error.context,
+        environment,
+        timestamp,
+      };
     }
 
-    report.push("\nTimestamp:", new Date().toISOString());
-
-    return report.join("\n");
+    return {
+      name: error.name || "Error",
+      message: error.message,
+      environment,
+      timestamp,
+    };
   }
 }

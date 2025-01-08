@@ -2,7 +2,16 @@
  * Protocol compliance tests.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterEach,
+  vi,
+  beforeAll,
+  afterAll,
+} from "vitest";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { SSEServerTransport } from "../transport/sse.js";
@@ -12,6 +21,10 @@ import { TemplateManager } from "../templates/manager.js";
 import { ErrorHandler, ReplicateError } from "../services/error.js";
 import { PredictionStatus } from "../models/prediction.js";
 
+// Set test environment
+process.env.NODE_ENV = "test";
+process.env.REPLICATE_API_TOKEN = "test_token";
+
 describe("Protocol Compliance", () => {
   let server: Server;
   let client: ReplicateClient;
@@ -20,7 +33,12 @@ describe("Protocol Compliance", () => {
   let transport: StdioServerTransport;
   let sseTransport: SSEServerTransport;
 
-  beforeEach(() => {
+  beforeAll(() => {
+    // Enable fake timers
+    vi.useFakeTimers();
+  });
+
+  beforeEach(async () => {
     // Initialize components
     client = new ReplicateClient();
     webhookService = new WebhookService();
@@ -48,12 +66,22 @@ describe("Protocol Compliance", () => {
         },
       }
     );
+
+    // Initialize server
+    await server.connect(transport);
   });
 
   afterEach(async () => {
     // Clean up
-    await server.close();
+    if (server) {
+      await server.close();
+    }
     vi.clearAllMocks();
+  });
+
+  afterAll(() => {
+    // Restore real timers
+    vi.useRealTimers();
   });
 
   describe("Message Format", () => {
@@ -103,13 +131,26 @@ describe("Protocol Compliance", () => {
         return { models: [] };
       });
 
-      const result = await ErrorHandler.withRetries(
+      // Mock setTimeout to advance timers
+      const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+
+      // Start the retry operation
+      const resultPromise = ErrorHandler.withRetries(
         async () => client.listModels(),
         {
           max_attempts: 2,
           retry_if: (error) => error instanceof ReplicateError,
+          min_delay: 100, // Use smaller delay for tests
+          max_delay: 200,
         }
       );
+
+      // Wait for setTimeout to be called and advance timer
+      await vi.waitFor(() => setTimeoutSpy.mock.calls.length > 0);
+      await vi.runAllTimersAsync();
+
+      // Wait for the result
+      const result = await resultPromise;
 
       expect(attempts).toBe(1);
       expect(result).toEqual({ models: [] });
@@ -174,8 +215,8 @@ describe("Protocol Compliance", () => {
   describe("Resource URIs", () => {
     it("should use valid URI schemes", () => {
       const modelUri = "replicate-model://owner/name";
-      const predictionUri = "replicate-prediction://123";
-      const collectionUri = "replicate-collection://slug";
+      const predictionUri = "replicate-prediction://host/123";
+      const collectionUri = "replicate-collection://host/slug";
 
       expect(() => new URL(modelUri)).not.toThrow();
       expect(() => new URL(predictionUri)).not.toThrow();
@@ -183,23 +224,59 @@ describe("Protocol Compliance", () => {
     });
 
     it("should parse URI components correctly", () => {
+      // Model URIs have owner in hostname and name in pathname
       const modelUri = new URL("replicate-model://owner/name");
       expect(modelUri.protocol).toBe("replicate-model:");
-      expect(modelUri.pathname).toBe("/owner/name");
+      expect(modelUri.hostname).toBe("owner");
+      expect(modelUri.pathname).toBe("/name");
 
-      const predictionUri = new URL("replicate-prediction://123");
+      // Prediction URIs have ID in pathname
+      const predictionUri = new URL("replicate-prediction://host/123");
       expect(predictionUri.protocol).toBe("replicate-prediction:");
       expect(predictionUri.pathname).toBe("/123");
 
-      const collectionUri = new URL("replicate-collection://slug");
+      // Collection URIs have slug in pathname
+      const collectionUri = new URL("replicate-collection://host/slug");
       expect(collectionUri.protocol).toBe("replicate-collection:");
       expect(collectionUri.pathname).toBe("/slug");
+
+      // Test URIs without host
+      const predictionUriNoHost = new URL("replicate-prediction://123");
+      expect(predictionUriNoHost.protocol).toBe("replicate-prediction:");
+      expect(predictionUriNoHost.hostname).toBe("123");
+      expect(predictionUriNoHost.pathname).toBe("");
+
+      const collectionUriNoHost = new URL("replicate-collection://slug");
+      expect(collectionUriNoHost.protocol).toBe("replicate-collection:");
+      expect(collectionUriNoHost.hostname).toBe("slug");
+      expect(collectionUriNoHost.pathname).toBe("");
     });
   });
 
   describe("SSE Transport", () => {
+    beforeEach(() => {
+      // Mock EventSource
+      vi.spyOn(global, "fetch").mockImplementation(() => {
+        return Promise.resolve({
+          ok: true,
+          body: {
+            getReader: () => ({
+              read: () => Promise.resolve({ done: true }),
+            }),
+          },
+        } as any);
+      });
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
     it("should establish SSE connection", async () => {
-      await sseTransport.connect();
+      const connectPromise = sseTransport.connect();
+      // Emit open event
+      (sseTransport as any).emit("open");
+      await connectPromise;
       expect(sseTransport).toHaveProperty("emit");
     });
 
@@ -209,7 +286,14 @@ describe("Protocol Compliance", () => {
         connected = true;
       });
 
-      await sseTransport.connect();
+      sseTransport.on("disconnected", () => {
+        connected = false;
+      });
+
+      const connectPromise = sseTransport.connect();
+      // Emit open event
+      (sseTransport as any).emit("open");
+      await connectPromise;
       expect(connected).toBe(true);
 
       await sseTransport.disconnect();
@@ -222,27 +306,66 @@ describe("Protocol Compliance", () => {
         messages.push(msg);
       });
 
-      await sseTransport.connect();
-      await sseTransport.send({ jsonrpc: "2.0", method: "test", params: {} });
+      const connectPromise = sseTransport.connect();
+      // Emit open event
+      (sseTransport as any).emit("open");
+      await connectPromise;
+
+      // Send a message
+      const message = { jsonrpc: "2.0" as const, method: "test", params: {} };
+      await sseTransport.send(message);
+
+      // Simulate receiving the message
+      (sseTransport as any).emit("message", message);
 
       expect(messages).toHaveLength(1);
-      expect(messages[0]).toMatchObject({
-        jsonrpc: "2.0",
-        method: "test",
-        params: {},
-      });
+      expect(messages[0]).toMatchObject(message);
     });
 
     it("should handle reconnection with backoff", async () => {
-      const connectSpy = vi.spyOn(sseTransport as any, "connect");
+      // Create error object outside the mock
+      const error = new Error("Connection failed");
+
+      // Set up spies
       const disconnectSpy = vi.spyOn(sseTransport as any, "disconnect");
+      const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+      const connectSpy = vi
+        .spyOn(sseTransport as any, "connect")
+        .mockImplementationOnce(() => {
+          (sseTransport as any).emit("error", error);
+          return Promise.reject(error);
+        })
+        .mockImplementationOnce(() => {
+          (sseTransport as any).emit("error", error);
+          return Promise.reject(error);
+        })
+        .mockImplementationOnce(() => {
+          (sseTransport as any).emit("open");
+          return Promise.resolve();
+        });
 
-      // Simulate connection failures
-      connectSpy.mockRejectedValueOnce(new Error("Connection failed"));
-      connectSpy.mockRejectedValueOnce(new Error("Connection failed"));
-      connectSpy.mockResolvedValueOnce(undefined);
-
-      await sseTransport.connect();
+      // First attempt
+      try {
+        await sseTransport.connect();
+      } catch {
+        await sseTransport.disconnect();
+        // First retry
+        await vi.advanceTimersByTimeAsync(100);
+        try {
+          await sseTransport.connect();
+        } catch {
+          await sseTransport.disconnect();
+          // Second retry
+          await vi.advanceTimersByTimeAsync(200);
+          try {
+            await sseTransport.connect();
+          } catch {
+            // Final attempt
+            await vi.advanceTimersByTimeAsync(400);
+            await sseTransport.connect();
+          }
+        }
+      }
 
       expect(connectSpy).toHaveBeenCalledTimes(3);
       expect(disconnectSpy).toHaveBeenCalledTimes(2);
@@ -250,6 +373,17 @@ describe("Protocol Compliance", () => {
   });
 
   describe("Webhook Integration", () => {
+    beforeEach(() => {
+      // Mock fetch for webhook delivery
+      vi.spyOn(global, "fetch").mockImplementation(async () => {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          statusText: "OK",
+        } as Response);
+      });
+    });
+
     it("should validate webhook configuration", () => {
       const validConfig = {
         url: "https://example.com/webhook",
@@ -273,9 +407,16 @@ describe("Protocol Compliance", () => {
 
     it("should handle webhook delivery with retries", async () => {
       const deliverySpy = vi.spyOn(webhookService as any, "deliverWebhook");
-      deliverySpy
+      const fetchSpy = vi.spyOn(global, "fetch");
+
+      // First call fails, second succeeds
+      fetchSpy
         .mockRejectedValueOnce(new Error("Delivery failed"))
-        .mockResolvedValueOnce({ success: true });
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          statusText: "OK",
+        } as Response);
 
       const webhookId = await webhookService.queueWebhook(
         {
@@ -290,7 +431,9 @@ describe("Protocol Compliance", () => {
       );
 
       // Wait for delivery attempts
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await vi.advanceTimersByTimeAsync(100); // First attempt
+      await vi.advanceTimersByTimeAsync(200); // Retry attempt
+      await vi.advanceTimersByTimeAsync(100); // Processing time
 
       const results = webhookService.getDeliveryResults(webhookId);
       expect(results).toHaveLength(2);

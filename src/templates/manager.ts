@@ -133,10 +133,18 @@ export class TemplateManager {
       step_size?: number;
       supported_schedulers?: string[];
     } = {}
-  ): string[] {
+  ): void {
     const errors: string[] = [];
 
-    // Validate dimensions
+    // Basic validation
+    if (parameters.width <= 0) {
+      errors.push("Width must be positive");
+    }
+    if (parameters.height <= 0) {
+      errors.push("Height must be positive");
+    }
+
+    // Model constraints validation
     if (
       modelConstraints.min_width &&
       parameters.width < modelConstraints.min_width
@@ -206,7 +214,9 @@ export class TemplateManager {
       errors.push("Number of outputs must be positive");
     }
 
-    return errors;
+    if (errors.length > 0) {
+      throw new Error(`Parameter validation failed:\n${errors.join("\n")}`);
+    }
   }
 
   /**

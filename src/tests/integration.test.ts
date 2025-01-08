@@ -2,7 +2,16 @@
  * Integration tests with Replicate API.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterEach,
+  vi,
+  beforeAll,
+  afterAll,
+} from "vitest";
 import { ReplicateClient } from "../replicate_client.js";
 import { WebhookService } from "../services/webhook.js";
 import { TemplateManager } from "../templates/manager.js";

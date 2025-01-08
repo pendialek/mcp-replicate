@@ -135,6 +135,7 @@ export class SSEServerTransport extends BaseTransport {
   private keepAliveIntervals: Map<string, NodeJS.Timeout>;
   private reconnectAttempts: Map<string, number>;
   private subscriptions: Map<string, Set<string>>;
+  private isConnected: boolean;
 
   constructor() {
     super();
@@ -142,6 +143,7 @@ export class SSEServerTransport extends BaseTransport {
     this.keepAliveIntervals = new Map();
     this.reconnectAttempts = new Map();
     this.subscriptions = new Map();
+    this.isConnected = false;
   }
 
   /**
@@ -150,7 +152,7 @@ export class SSEServerTransport extends BaseTransport {
   async connect(): Promise<void> {
     // Initialize connection tracking
     const connectionId = Math.random().toString(36).substring(2, 15);
-    const connection = new EventSource("/events");
+    const connection = new EventSource("http://localhost:3000/events");
     this.connections.set(connectionId, connection);
     this.reconnectAttempts.set(connectionId, 0);
     this.subscriptions.set(connectionId, new Set());
@@ -170,9 +172,12 @@ export class SSEServerTransport extends BaseTransport {
    */
   async disconnect(): Promise<void> {
     // Clean up all connections
-    for (const [connectionId] of this.connections) {
+    const connectionIds = Array.from(this.connections.keys());
+    for (const connectionId of connectionIds) {
       await this.cleanupConnection(connectionId);
     }
+    this.isConnected = false;
+    this.emit("disconnected");
   }
 
   /**
@@ -244,13 +249,16 @@ export class SSEServerTransport extends BaseTransport {
 
     connection.onopen = () => {
       this.reconnectAttempts.set(connectionId, 0);
+      this.isConnected = true;
       this.emit("connected");
+      this.emit("open");
     };
 
     connection.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data) as MCPMessage;
         this.emit("message", message);
+        this.emit("raw", event);
       } catch (error) {
         console.error("Failed to parse SSE message:", error);
       }
@@ -277,11 +285,13 @@ export class SSEServerTransport extends BaseTransport {
       connection.close();
     }
 
-    // Wait before reconnecting
-    await new Promise((resolve) => setTimeout(resolve, RECONNECT_TIMEOUT));
+    // Wait before reconnecting with exponential backoff
+    const attempts = this.reconnectAttempts.get(connectionId) || 0;
+    const delay = Math.min(1000 * Math.pow(2, attempts), 30000);
+    await new Promise((resolve) => setTimeout(resolve, delay));
 
     // Create new connection
-    const newConnection = new EventSource("/events");
+    const newConnection = new EventSource("http://localhost:3000/events");
     this.connections.set(connectionId, newConnection);
     this.setupEventHandlers(connectionId);
   }
@@ -304,6 +314,11 @@ export class SSEServerTransport extends BaseTransport {
     this.keepAliveIntervals.delete(connectionId);
     this.reconnectAttempts.delete(connectionId);
     this.subscriptions.delete(connectionId);
+
+    if (this.connections.size === 0) {
+      this.isConnected = false;
+      this.emit("disconnected");
+    }
   }
 
   /**
