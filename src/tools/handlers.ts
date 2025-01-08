@@ -345,6 +345,14 @@ export async function handleListPredictions(
       cache.predictionCache.set(prediction.id, prediction);
     }
 
+    // Format predictions as text
+    const predictionTexts = predictions.map((prediction) => {
+      const status = prediction.status.toUpperCase();
+      const model = prediction.version;
+      const time = new Date(prediction.created_at).toLocaleString();
+      return `- ID: ${prediction.id}\n  Status: ${status}\n  Model: ${model}\n  Created: ${time}`;
+    });
+
     return {
       content: [
         {
@@ -352,8 +360,8 @@ export async function handleListPredictions(
           text: `Found ${predictions.length} predictions:`,
         },
         {
-          type: "json",
-          json: predictions,
+          type: "text",
+          text: predictionTexts.join("\n\n"),
         },
       ],
     };
