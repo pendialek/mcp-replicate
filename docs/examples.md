@@ -31,15 +31,15 @@ await client.cancelPrediction({
 ### Browsing Models
 
 ```typescript
-// List all models
+// List all models (uses caching)
 const models = await client.listModels({});
 
-// Filter models by owner
+// Filter models by owner (cached by owner)
 const stabilityModels = await client.listModels({
   owner: "stability-ai"
 });
 
-// Search for specific models
+// Search for specific models (cached by query)
 const searchResults = await client.searchModels({
   query: "text to image models with good quality"
 });
@@ -48,10 +48,10 @@ const searchResults = await client.searchModels({
 ### Working with Collections
 
 ```typescript
-// List available collections
+// List available collections (cached)
 const collections = await client.listCollections({});
 
-// Get details of a specific collection
+// Get details of a specific collection (cached by slug)
 const textToImage = await client.getCollection({
   slug: "text-to-image"
 });
@@ -90,27 +90,37 @@ const prediction = await client.createPrediction({
 });
 
 // Example webhook handler (Express.js)
-app.post("/webhooks/replicate", (req, res) => {
-  const signature = req.headers["x-replicate-signature"];
-  if (!verifyWebhookSignature(signature, webhookSecret, req.body)) {
-    return res.status(401).send("Invalid signature");
-  }
+app.post("/webhooks/replicate", async (req, res) => {
+  try {
+    const signature = req.headers["x-replicate-signature"];
+    const webhookSecret = await client.getWebhookSecret();
+    
+    if (!verifyWebhookSignature(signature, webhookSecret, req.body)) {
+      throw new ValidationError("Invalid signature");
+    }
 
-  const { event, prediction } = req.body;
-  switch (event) {
-    case "prediction.completed":
-      handleCompletedPrediction(prediction);
-      break;
-    case "prediction.failed":
-      handleFailedPrediction(prediction);
-      break;
-  }
+    const { event, prediction } = req.body;
+    switch (event) {
+      case "prediction.completed":
+        await handleCompletedPrediction(prediction);
+        break;
+      case "prediction.failed":
+        await handleFailedPrediction(prediction);
+        break;
+    }
 
-  res.status(200).send("OK");
+    res.status(200).send("OK");
+  } catch (error) {
+    console.error(ErrorHandler.createErrorReport(error));
+    res.status(error instanceof ValidationError ? 401 : 500).json({
+      error: error.message,
+      code: error.name
+    });
+  }
 });
 ```
 
-### Error Handling
+### Enhanced Error Handling
 
 ```typescript
 try {
@@ -119,15 +129,56 @@ try {
     input: { prompt: "Test" }
   });
 } catch (error) {
-  if (error.code === "ResourceNotFound") {
-    console.error("Model not found");
-  } else if (error.code === "RateLimitExceeded") {
-    const retryAfter = error.data.retryAfter;
-    console.error(`Rate limit exceeded. Try again in ${retryAfter} seconds`);
+  if (error instanceof NotFoundError) {
+    console.error("Model not found:", error.context.resource);
+  } else if (error instanceof RateLimitExceeded) {
+    console.error(
+      `Rate limit exceeded. Try again in ${error.retry_after} seconds. `,
+      `Remaining requests: ${error.remaining_requests}, `,
+      `Reset time: ${error.reset_time}`
+    );
+  } else if (error instanceof ValidationError) {
+    console.error(
+      `Validation error for ${error.context.field}: `,
+      error.context.value
+    );
+  } else if (error instanceof PredictionError) {
+    console.error(
+      `Prediction ${error.context.prediction_id} failed: `,
+      error.context.logs
+    );
   } else {
-    console.error("Unexpected error:", error.message);
+    // Generate detailed error report
+    console.error(ErrorHandler.createErrorReport(error));
   }
 }
+```
+
+### Automatic Retries with Backoff
+
+```typescript
+// Using built-in retry mechanism
+const prediction = await ErrorHandler.withRetries(
+  async () => {
+    return client.createPrediction({
+      version: "stability-ai/sdxl@latest",
+      input: { prompt: "Test prompt" }
+    });
+  },
+  {
+    max_attempts: 3,
+    min_delay: 1000,
+    max_delay: 10000,
+    backoff_factor: 2,
+    jitter: true,
+    retry_if: (error) => error instanceof RateLimitExceeded,
+    on_retry: (error, attempt) => {
+      console.warn(
+        `Attempt ${attempt + 1} failed: ${error.message}. Retrying...`
+      );
+    }
+  }
+);
 ```
 
 ### Real-time Updates with SSE
@@ -144,32 +195,60 @@ subscription.on("update", (update) => {
 });
 
 subscription.on("error", (error) => {
-  console.error("Subscription error:", error);
+  // Generate detailed error report
+  console.error(ErrorHandler.createErrorReport(error));
 });
 
 // Cleanup when done
 subscription.unsubscribe();
 ```
 
-### Batch Processing
+### Cache Control
 
 ```typescript
-// Create multiple predictions
-async function batchProcess(prompts: string[]) {
-  const predictions = await Promise.all(
-    prompts.map(prompt =>
-      client.createPrediction({
-        version: "stability-ai/sdxl@latest",
-        input: { prompt }
-      })
-    )
-  );
+// Working with cached data
+async function getModelWithCache(owner: string, name: string) {
+  try {
+    // Attempt to get from cache first
+    const model = await client.getModel(owner, name);
+    console.log("Cache hit:", model.id);
+    return model;
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      console.warn("Cache miss, fetching from API");
+      // Handle cache miss
+      return refreshModel(owner, name);
+    }
+    throw error;
+  }
+}
 
-  // Monitor all predictions
-  return Promise.all(
-    predictions.map(prediction =>
-      client.getPrediction({ prediction_id: prediction.id })
-    )
+// Batch processing with cache
+async function batchProcess(prompts: string[]) {
+  return await ErrorHandler.withRetries(
+    async () => {
+      const predictions = await Promise.all(
+        prompts.map(prompt =>
+          client.createPrediction({
+            version: "stability-ai/sdxl@latest",
+            input: { prompt }
+          })
+        )
+      );
+
+      // Monitor all predictions (uses cache for completed predictions)
+      return Promise.all(
+        predictions.map(prediction =>
+          client.getPredictionStatus(prediction.id)
+        )
+      );
+    },
+    {
+      max_attempts: 3,
+      on_retry: (error, attempt) => {
+        console.warn(`Batch processing attempt ${attempt + 1} failed:`, error);
+      }
+    }
   );
 }
 
@@ -183,60 +262,95 @@ const prompts = [
 const results = await batchProcess(prompts);
 ```
 
-### Rate Limit Handling
-
-```typescript
-// Implement exponential backoff
-async function withRetry<T>(
-  operation: () => Promise<T>,
-  maxRetries = 3
-): Promise<T> {
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await operation();
-    } catch (error) {
-      if (error.code !== "RateLimitExceeded" || attempt === maxRetries - 1) {
-        throw error;
-      }
-      const delay = Math.pow(2, attempt) * 1000;
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-  throw new Error("Max retries exceeded");
-}
-
-// Usage
-const prediction = await withRetry(() =>
-  client.createPrediction({
-    version: "stability-ai/sdxl@latest",
-    input: { prompt: "Test prompt" }
-  })
-);
-```
-
 ## Best Practices
 
-1. Always handle errors appropriately:
-   - Check for rate limits
-   - Validate inputs before sending
-   - Implement retry logic for transient failures
+1. Always use proper error handling:
+   ```typescript
+   try {
+     // Your code here
+   } catch (error) {
+     if (error instanceof ReplicateError) {
+       // Handle specific error types
+       console.error(error.getReport());
+     } else {
+       // Handle unexpected errors
+       console.error(ErrorHandler.createErrorReport(error));
+     }
+   }
+   ```
 
-2. Use templates for consistent results:
-   - Leverage quality presets for different use cases
-   - Use style templates for consistent aesthetics
-   - Apply size templates for standard dimensions
+2. Implement proper retry logic:
+   ```typescript
+   const result = await ErrorHandler.withRetries(
+     async () => {
+       // Your API call here
+     },
+     {
+       max_attempts: 3,
+       retry_if: (error) => ErrorHandler.isRetryable(error)
+     }
+   );
+   ```
 
-3. Implement webhook security:
-   - Verify webhook signatures
-   - Use HTTPS endpoints
-   - Implement retry logic for failed deliveries
+3. Use caching effectively:
+   - Let the client handle caching automatically
+   - Cache is invalidated appropriately for each resource type
+   - Completed predictions are cached indefinitely
+   - In-progress predictions are refreshed frequently
 
-4. Monitor prediction status:
-   - Subscribe to real-time updates when possible
-   - Implement timeouts for long-running predictions
-   - Handle failed predictions gracefully
+4. Implement webhook security:
+   ```typescript
+   // Verify webhook signatures
+   const isValid = await verifyWebhook(
+     signature,
+     await client.getWebhookSecret(),
+     payload
+   );
+   ```
 
-5. Optimize resource usage:
-   - Batch similar requests when possible
-   - Implement caching where appropriate
-   - Clean up subscriptions when no longer needed
+5. Monitor prediction status:
+   ```typescript
+   // Use status-aware caching
+   const status = await client.getPredictionStatus(predictionId);
+   if (status.status === "completed") {
+     // Result is cached
+   } else {
+     // Status will be refreshed on next check
+   }
+   ```
+
+6. Handle rate limits gracefully:
+   ```typescript
+   try {
+     await makeRequest();
+   } catch (error) {
+     if (error instanceof RateLimitExceeded) {
+       const { retry_after, remaining_requests, reset_time } = error;
+       console.log(`Rate limit hit. Retry after ${retry_after}s`);
+       // Implement backoff strategy
+     }
+   }
+   ```
+
+7. Use proper error context:
+   ```typescript
+   try {
+     await makeRequest();
+   } catch (error) {
+     // Log detailed error information
+     console.error(error.getReport());
+     // Include stack trace and context
+     console.error(error.context);
+   }
+   ```
+
+8. Clean up resources:
+   ```typescript
+   const subscription = client.subscribe(resourceUri);
+   try {
+     // Use subscription
+   } finally {
+     // Always clean up
+     subscription.unsubscribe();
+   }
+   ```

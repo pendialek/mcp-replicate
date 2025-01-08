@@ -227,19 +227,146 @@ Standard image dimensions:
 
 ## Error Handling
 
-The server uses standard MCP error codes:
+The server implements a comprehensive error handling system with detailed context and automatic recovery mechanisms.
 
-- `InvalidRequest`: Malformed request or invalid parameters
-- `MethodNotFound`: Unknown tool or method
-- `ResourceNotFound`: Requested resource doesn't exist
-- `RateLimitExceeded`: API rate limit reached
-- `InternalError`: Server-side error
-- `AuthenticationError`: Invalid or missing API token
+### Error Types
 
-Each error includes:
-- `code`: Error type identifier
-- `message`: Human-readable error description
-- `data`: Optional additional error details
+#### ReplicateError
+Base error class with enhanced context and stack traces.
+
+#### RateLimitExceeded
+```typescript
+{
+  code: "RateLimitExceeded",
+  message: "Rate limit exceeded. Retry after 60 seconds.",
+  context: {
+    retry_after: 60,
+    remaining_requests: 0,
+    reset_time: "2024-01-10T12:30:00Z"
+  }
+}
+```
+
+#### AuthenticationError
+```typescript
+{
+  code: "AuthenticationError",
+  message: "Invalid or missing API token",
+  context: {
+    details: "Token expired"
+  }
+}
+```
+
+#### NotFoundError
+```typescript
+{
+  code: "NotFoundError",
+  message: "Resource not found: stability-ai/nonexistent-model",
+  context: {
+    resource: "stability-ai/nonexistent-model"
+  }
+}
+```
+
+#### PredictionError
+```typescript
+{
+  code: "PredictionError",
+  message: "Prediction failed: Invalid input parameters",
+  context: {
+    prediction_id: "pred_123abc",
+    status: "failed",
+    logs: "Error: prompt cannot be empty"
+  }
+}
+```
+
+#### ValidationError
+```typescript
+{
+  code: "ValidationError",
+  message: "Validation error for width: Must be between 512 and 2048",
+  context: {
+    field: "width",
+    value: 256
+  }
+}
+```
+
+### Retry Mechanism
+
+The server implements sophisticated retry logic with exponential backoff:
+
+- Automatic retries for transient failures
+- Configurable retry attempts (default: 3)
+- Exponential backoff with jitter
+- Smart retry decisions based on error type
+- Detailed retry status logging
+
+Example retry configuration:
+```typescript
+{
+  max_attempts: 3,
+  min_delay: 1000,    // 1 second
+  max_delay: 10000,   // 10 seconds
+  backoff_factor: 2,  // Exponential growth
+  jitter: true       // Random delay variation
+}
+```
+
+### Error Reporting
+
+Comprehensive error reports include:
+- Error type and message
+- Detailed context
+- Stack traces
+- Timestamp information
+- Request/response details
+- System state information
+
+## Caching
+
+The server implements an intelligent caching system to improve performance and reduce API calls.
+
+### Cache Types
+
+#### Model Cache
+- Caches model metadata and versions
+- TTL-based invalidation (24 hours)
+- Automatic refresh on updates
+- Search results caching
+
+#### Prediction Cache
+- Smart caching based on prediction status
+- Completed predictions cached indefinitely
+- In-progress predictions refreshed frequently
+- Status-aware cache invalidation
+
+#### Collection Cache
+- Collection metadata and models
+- TTL-based invalidation (6 hours)
+- Automatic refresh on collection updates
+
+### Cache Features
+
+- LRU (Least Recently Used) eviction
+- Memory usage monitoring
+- Cache statistics tracking
+- Automatic cache warming
+- Cache hit/miss metrics
+- Configurable TTLs per resource type
+
+### Cache Control
+
+Headers for fine-grained cache control:
+```typescript
+{
+  "Cache-Control": "max-age=3600",
+  "ETag": "\"abc123\"",
+  "Last-Modified": "Wed, 10 Jan 2024 12:00:00 GMT"
+}
+```
 
 ## Webhooks
 
@@ -266,10 +393,27 @@ The server supports webhooks for asynchronous notifications:
 
 ## Rate Limiting
 
-The server implements rate limiting based on Replicate's API constraints:
+The server implements sophisticated rate limiting:
 
+### Limits
 - Concurrent predictions per user
 - API requests per minute
 - Webhook delivery attempts
+
+### Features
+- Automatic request queuing
+- Smart backoff strategies
+- Request prioritization
+- Rate limit headers
+- Quota monitoring
+
+### Headers
+```typescript
+{
+  "X-RateLimit-Limit": "100",
+  "X-RateLimit-Remaining": "95",
+  "X-RateLimit-Reset": "1704891600"
+}
+```
 
 Rate limit errors include retry-after headers and remaining quota information.

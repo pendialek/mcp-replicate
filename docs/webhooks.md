@@ -44,34 +44,74 @@ First, create an endpoint in your application to receive webhook notifications. 
 
 ```typescript
 import express from "express";
-import crypto from "crypto";
+import { WebhookHandler, ErrorHandler } from "@replicate/mcp";
 
 const app = express();
 app.use(express.json());
 
-app.post("/webhooks/replicate", (req, res) => {
-  // Verify webhook signature
-  const signature = req.headers["x-replicate-signature"];
-  if (!verifySignature(signature, webhookSecret, req.body)) {
-    return res.status(401).send("Invalid signature");
-  }
+app.post("/webhooks/replicate", async (req, res) => {
+  try {
+    // Verify webhook signature with enhanced error handling
+    const signature = req.headers["x-replicate-signature"];
+    const webhookSecret = await client.getWebhookSecret();
+    
+    if (!WebhookHandler.verifySignature(signature, webhookSecret, req.body)) {
+      throw new ValidationError("Invalid webhook signature", {
+        signature,
+        payload: req.body
+      });
+    }
 
-  // Process the webhook
-  const { event, prediction } = req.body;
-  
-  switch (event) {
-    case "prediction.started":
-      console.log(`Prediction ${prediction.id} started processing`);
-      break;
-    case "prediction.completed":
-      console.log(`Prediction ${prediction.id} completed:`, prediction.output);
-      break;
-    case "prediction.failed":
-      console.error(`Prediction ${prediction.id} failed:`, prediction.error);
-      break;
-  }
+    // Process the webhook with comprehensive error handling
+    const { event, prediction } = req.body;
+    
+    await ErrorHandler.withRetries(
+      async () => {
+        switch (event) {
+          case "prediction.started":
+            await handlePredictionStarted(prediction);
+            break;
+          case "prediction.completed":
+            await handlePredictionCompleted(prediction);
+            break;
+          case "prediction.failed":
+            await handlePredictionFailed(prediction);
+            break;
+          default:
+            throw new ValidationError(`Unknown event type: ${event}`);
+        }
+      },
+      {
+        max_attempts: 3,
+        min_delay: 1000,
+        max_delay: 10000,
+        backoff_factor: 2,
+        jitter: true,
+        retry_if: (error) => {
+          // Retry on specific error types
+          return error instanceof NetworkError ||
+                 error instanceof DatabaseError;
+        }
+      }
+    );
 
-  res.status(200).send("OK");
+    res.status(200).send("OK");
+  } catch (error) {
+    // Enhanced error reporting
+    console.error(ErrorHandler.createErrorReport(error));
+    
+    if (error instanceof ValidationError) {
+      res.status(401).json({
+        error: "Webhook validation failed",
+        details: error.context
+      });
+    } else {
+      res.status(500).json({
+        error: "Webhook processing failed",
+        details: error.message
+      });
+    }
+  }
 });
 ```
 
@@ -85,91 +125,170 @@ const prediction = await client.createPrediction({
   input: {
     prompt: "A serene landscape"
   },
-  webhook_url: "https://api.yourapp.com/webhooks/replicate"
+  webhook_url: "https://api.yourapp.com/webhooks/replicate",
+  webhook_events: ["started", "completed", "failed"] // Optional event filtering
 });
 ```
 
-## Security
+## Enhanced Security
 
 ### Signature Verification
 
-Webhooks include a signature in the `X-Replicate-Signature` header. Verify this signature to ensure the webhook is legitimate:
+Webhooks include a signature in the `X-Replicate-Signature` header. The WebhookHandler provides robust signature verification:
 
 ```typescript
-function verifySignature(
-  signature: string | undefined,
-  secret: string,
-  payload: any
-): boolean {
-  if (!signature) return false;
+class WebhookHandler {
+  static verifySignature(
+    signature: string | undefined,
+    secret: string,
+    payload: any,
+    options = {
+      clockTolerance: 300, // 5 minutes
+      algorithm: "sha256"
+    }
+  ): boolean {
+    try {
+      if (!signature) {
+        throw new ValidationError("Missing signature");
+      }
 
-  const expectedSignature = crypto
-    .createHmac("sha256", secret)
-    .update(JSON.stringify(payload))
-    .digest("hex");
+      // Parse signature components
+      const [timestamp, hash] = signature.split(",");
+      if (!timestamp || !hash) {
+        throw new ValidationError("Invalid signature format");
+      }
 
-  return crypto.timingSafeEqual(
-    Buffer.from(signature),
-    Buffer.from(expectedSignature)
-  );
+      // Verify timestamp
+      const eventTime = parseInt(timestamp, 10);
+      const currentTime = Math.floor(Date.now() / 1000);
+      if (Math.abs(currentTime - eventTime) > options.clockTolerance) {
+        throw new ValidationError("Signature timestamp expired");
+      }
+
+      // Calculate expected signature
+      const expectedSignature = crypto
+        .createHmac(options.algorithm, secret)
+        .update(`${timestamp}.${JSON.stringify(payload)}`)
+        .digest("hex");
+
+      // Constant-time comparison
+      return crypto.timingSafeEqual(
+        Buffer.from(hash),
+        Buffer.from(expectedSignature)
+      );
+    } catch (error) {
+      throw new ValidationError("Signature verification failed", {
+        details: error.message
+      });
+    }
+  }
 }
 ```
 
-### Best Practices
+## Enhanced Retry Logic
 
-1. **Use HTTPS**: Always use HTTPS for webhook endpoints
-2. **Validate Signatures**: Always verify webhook signatures
-3. **Handle Timeouts**: Set appropriate timeout limits
-4. **Implement Idempotency**: Handle duplicate deliveries gracefully
-5. **Log Webhooks**: Maintain logs of webhook deliveries
-
-## Retry Logic
-
-The server implements automatic retries for failed webhook deliveries:
+The server implements sophisticated retry logic for webhook deliveries:
 
 ```typescript
 interface RetryConfig {
-  maxAttempts: number;      // Maximum retry attempts
-  initialDelay: number;     // Initial delay in milliseconds
-  maxDelay: number;         // Maximum delay between retries
-  backoffFactor: number;    // Exponential backoff multiplier
+  max_attempts: number;      // Maximum retry attempts
+  min_delay: number;         // Minimum delay in milliseconds
+  max_delay: number;         // Maximum delay between retries
+  backoff_factor: number;    // Exponential backoff multiplier
+  jitter: boolean;          // Add random jitter to delays
+  timeout: number;          // Request timeout
+  retry_if: (error: Error) => boolean; // Custom retry condition
 }
 
 const defaultRetryConfig: RetryConfig = {
-  maxAttempts: 5,
-  initialDelay: 1000,
-  maxDelay: 60000,
-  backoffFactor: 2
+  max_attempts: 5,
+  min_delay: 1000,
+  max_delay: 60000,
+  backoff_factor: 2,
+  jitter: true,
+  timeout: 10000,
+  retry_if: (error) => {
+    return error instanceof NetworkError ||
+           error instanceof TimeoutError ||
+           (error instanceof HttpError && error.status >= 500);
+  }
 };
 ```
 
 ### Retry Strategy
 
-1. First failure: Wait 1 second
-2. Second failure: Wait 2 seconds
-3. Third failure: Wait 4 seconds
-4. Fourth failure: Wait 8 seconds
-5. Fifth failure: Wait 16 seconds
-
-After maxAttempts failures, the webhook is marked as failed in the prediction status.
-
-## Monitoring
-
-### Webhook Status
-
-Track webhook delivery status in prediction details:
+The retry mechanism uses exponential backoff with jitter:
 
 ```typescript
-const prediction = await client.getPrediction({
-  prediction_id: "pred_123abc"
-});
-
-console.log("Webhook status:", prediction.webhook_completed);
+class WebhookDeliveryManager {
+  async deliverWithRetries(
+    webhook: Webhook,
+    payload: WebhookPayload,
+    config: RetryConfig
+  ) {
+    return ErrorHandler.withRetries(
+      async () => {
+        const response = await this.deliver(webhook, payload);
+        if (!response.ok) {
+          throw new HttpError(response.status, await response.text());
+        }
+        return response;
+      },
+      {
+        max_attempts: config.max_attempts,
+        min_delay: config.min_delay,
+        max_delay: config.max_delay,
+        backoff_factor: config.backoff_factor,
+        jitter: config.jitter,
+        retry_if: config.retry_if,
+        on_retry: (error, attempt) => {
+          console.warn(
+            `Webhook delivery attempt ${attempt + 1} failed:`,
+            error.message
+          );
+        }
+      }
+    );
+  }
+}
 ```
 
-### Delivery Logs
+## Enhanced Monitoring
 
-Access webhook delivery logs for debugging:
+### Webhook Analytics
+
+Track detailed webhook metrics:
+
+```typescript
+interface WebhookMetrics {
+  total_deliveries: number;
+  successful_deliveries: number;
+  failed_deliveries: number;
+  retry_count: number;
+  average_latency: number;
+  error_distribution: Record<string, number>;
+}
+
+class WebhookMonitor {
+  private metrics: WebhookMetrics;
+
+  trackDelivery(delivery: WebhookDelivery) {
+    this.metrics.total_deliveries++;
+    if (delivery.success) {
+      this.metrics.successful_deliveries++;
+    } else {
+      this.metrics.failed_deliveries++;
+      this.metrics.retry_count += delivery.attempts - 1;
+      this.metrics.error_distribution[delivery.error?.name ?? "unknown"]++;
+    }
+    this.metrics.average_latency = this.calculateAverageLatency();
+  }
+}
+```
+
+### Enhanced Logging
+
+Comprehensive webhook logging with context:
 
 ```typescript
 interface WebhookDeliveryLog {
@@ -179,126 +298,85 @@ interface WebhookDeliveryLog {
   status: number;
   attempt: number;
   timestamp: string;
-  response?: string;
-  error?: string;
+  duration: number;
+  request: {
+    headers: Record<string, string>;
+    body: any;
+  };
+  response?: {
+    status: number;
+    headers: Record<string, string>;
+    body: string;
+  };
+  error?: {
+    name: string;
+    message: string;
+    stack: string;
+    context: any;
+  };
 }
 ```
 
-## Error Handling
+## Best Practices
 
-### Common Issues
-
-1. **Invalid Signature**
-   - Check webhook secret configuration
-   - Verify payload formatting
-   - Ensure clock synchronization
-
-2. **Timeout Issues**
-   - Increase server timeout limits
-   - Implement async processing
-   - Use webhook queuing
-
-3. **Network Problems**
-   - Implement circuit breakers
-   - Use retry mechanisms
-   - Monitor network stability
-
-### Example Error Handler
-
-```typescript
-async function handleWebhookError(error: Error, delivery: WebhookDelivery) {
-  // Log the error
-  console.error(`Webhook delivery ${delivery.id} failed:`, error);
-
-  // Check retry eligibility
-  if (delivery.attempt < config.maxAttempts) {
-    // Schedule retry
-    const delay = Math.min(
-      config.initialDelay * Math.pow(config.backoffFactor, delivery.attempt),
-      config.maxDelay
-    );
-    
-    setTimeout(() => retryDelivery(delivery), delay);
-  } else {
-    // Mark as permanently failed
-    await markWebhookFailed(delivery);
-  }
-}
-```
-
-## Testing Webhooks
-
-### Local Development
-
-Use tools like ngrok for local webhook testing:
-
-```bash
-# Start ngrok
-ngrok http 3000
-
-# Use the provided URL in your webhook configuration
-https://your-ngrok-url.ngrok.io/webhooks/replicate
-```
-
-### Test Mode
-
-The server includes a test mode for webhook development:
-
-```typescript
-const prediction = await client.createPrediction({
-  version: "stability-ai/sdxl@latest",
-  input: { prompt: "Test webhook" },
-  webhook_url: "https://api.yourapp.com/webhooks/replicate",
-  test_mode: true  // Sends test events immediately
-});
-```
-
-## Webhook Management
-
-### Updating Webhook URLs
-
-Update webhook configuration for existing predictions:
-
-```typescript
-await client.updatePrediction({
-  prediction_id: "pred_123abc",
-  webhook_url: "https://new-url.com/webhooks"
-});
-```
-
-### Disabling Webhooks
-
-Remove webhook configuration:
-
-```typescript
-await client.updatePrediction({
-  prediction_id: "pred_123abc",
-  webhook_url: null
-});
-```
-
-## Best Practices Summary
-
-1. **Security**
-   - Always use HTTPS
-   - Verify signatures
-   - Keep webhook secrets secure
-   - Implement rate limiting
+1. **Enhanced Security**
+   - Use HTTPS with strong TLS configuration
+   - Implement rate limiting with token buckets
+   - Rotate webhook secrets periodically
+   - Monitor for suspicious patterns
 
 2. **Reliability**
-   - Implement retry logic
-   - Use webhook queuing
-   - Monitor delivery status
-   - Log webhook events
+   - Implement circuit breakers for failing endpoints
+   - Use webhook queuing with persistent storage
+   - Monitor delivery success rates
+   - Implement fallback notification methods
 
 3. **Performance**
    - Process webhooks asynchronously
-   - Implement timeout handling
-   - Use appropriate server scaling
+   - Use connection pooling
+   - Implement request timeouts
    - Monitor resource usage
 
-4. **Maintenance**
-   - Regular log rotation
-   - Monitor failed deliveries
-   - Update webhook URLs as needed
-   - Test webhook endpoints
+4. **Error Handling**
+   ```typescript
+   // Implement comprehensive error handling
+   try {
+     await processWebhook(payload);
+   } catch (error) {
+     if (error instanceof ValidationError) {
+       // Handle validation errors
+       console.error(error.getReport());
+       await notifyAdmin(error);
+     } else if (error instanceof DeliveryError) {
+       // Handle delivery failures
+       await scheduleRetry(error.delivery);
+     } else {
+       // Handle unexpected errors
+       console.error(ErrorHandler.createErrorReport(error));
+       await fallbackNotification(payload);
+     }
+   }
+   ```
+
+5. **Monitoring**
+   ```typescript
+   // Implement comprehensive monitoring
+   class WebhookMonitor {
+     async trackDelivery(delivery: WebhookDelivery) {
+       // Track metrics
+       this.updateMetrics(delivery);
+       
+       // Log delivery details
+       await this.logDelivery(delivery);
+       
+       // Check for anomalies
+       if (this.detectAnomaly(delivery)) {
+         await this.notifyAdmin({
+           type: "webhook_anomaly",
+           delivery,
+           metrics: this.getMetrics()
+         });
+       }
+     }
+   }
+   ```

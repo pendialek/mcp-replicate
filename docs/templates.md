@@ -135,133 +135,302 @@ const prediction = await client.createPrediction({
 });
 ```
 
-## Combining Templates
-
-Templates can be combined to achieve specific results:
-
-```typescript
-const prediction = await client.createPrediction({
-  version: "stability-ai/sdxl@latest",
-  input: {
-    prompt: "A futuristic cityscape at night",
-    ...templates.quality.extreme,    // Maximum quality
-    ...templates.style.cinematic,    // Cinematic style
-    ...templates.size.widescreen     // Widescreen format
-  }
-});
-```
-
-## Custom Templates
-
-You can create custom templates by extending the base templates:
-
-```typescript
-const customTemplate = {
-  ...templates.quality.quality,
-  ...templates.style.cinematic,
-  ...templates.size.widescreen,
-  // Custom overrides
-  guidance_scale: 8.5,
-  negative_prompt: "low quality, blurry, amateur"
-};
-```
-
 ## Template Manager
 
-The TemplateManager class provides a centralized way to manage templates:
+The TemplateManager class provides a robust way to manage templates with validation and error handling:
 
 ```typescript
 class TemplateManager {
-  private templates: Map<string, any>;
+  private templates: Map<string, Template>;
+  private validationRules: Map<string, ValidationRule>;
 
   constructor() {
     this.templates = new Map();
+    this.validationRules = new Map();
     this.registerDefaults();
   }
 
-  registerTemplate(name: string, template: any) {
-    this.templates.set(name, template);
+  registerTemplate(name: string, template: Template, validate = true) {
+    try {
+      if (validate) {
+        this.validateTemplate(template);
+      }
+      this.templates.set(name, template);
+    } catch (error) {
+      throw new ValidationError(
+        `Invalid template: ${name}`,
+        "template",
+        template
+      );
+    }
   }
 
-  getTemplate(name: string) {
-    return this.templates.get(name);
+  getTemplate(name: string): Template {
+    const template = this.templates.get(name);
+    if (!template) {
+      throw new NotFoundError(`Template not found: ${name}`);
+    }
+    return template;
   }
 
-  private registerDefaults() {
-    // Register quality templates
-    Object.entries(qualityTemplates).forEach(([name, template]) => {
-      this.registerTemplate(`quality.${name}`, template);
-    });
+  validateTemplate(template: Template): boolean {
+    // Validate template structure
+    if (!this.validateStructure(template)) {
+      throw new ValidationError(
+        "Invalid template structure",
+        "structure",
+        template
+      );
+    }
 
-    // Register style templates
-    Object.entries(styleTemplates).forEach(([name, template]) => {
-      this.registerTemplate(`style.${name}`, template);
-    });
+    // Validate template parameters
+    if (!this.validateParameters(template)) {
+      throw new ValidationError(
+        "Invalid template parameters",
+        "parameters",
+        template
+      );
+    }
 
-    // Register size templates
-    Object.entries(sizeTemplates).forEach(([name, template]) => {
-      this.registerTemplate(`size.${name}`, template);
-    });
+    return true;
+  }
+
+  combineTemplates(...templates: Template[]): Template {
+    return ErrorHandler.withRetries(
+      () => {
+        const combined = templates.reduce(
+          (acc, template) => ({
+            ...acc,
+            ...template
+          }),
+          {}
+        );
+
+        this.validateTemplate(combined);
+        return combined;
+      },
+      {
+        max_attempts: 1,
+        retry_if: (error) => error instanceof ValidationError
+      }
+    );
+  }
+}
+```
+
+## Enhanced Error Handling
+
+The template system includes comprehensive error handling:
+
+### Template Validation Errors
+
+```typescript
+try {
+  const template = templateManager.getTemplate("quality.extreme");
+  templateManager.validateTemplate(template);
+} catch (error) {
+  if (error instanceof ValidationError) {
+    console.error(
+      `Template validation failed for ${error.context.field}: `,
+      error.context.value
+    );
+  } else if (error instanceof NotFoundError) {
+    console.error("Template not found:", error.context.resource);
+  } else {
+    console.error(ErrorHandler.createErrorReport(error));
+  }
+}
+```
+
+### Parameter Validation
+
+```typescript
+interface ParameterValidation {
+  validateRange(value: number, min: number, max: number): boolean;
+  validateEnum(value: string, allowedValues: string[]): boolean;
+  validateAspectRatio(width: number, height: number, ratio: string): boolean;
+}
+
+// Usage
+try {
+  const template = templateManager.getTemplate("size.custom");
+  if (!parameterValidation.validateRange(template.width, 512, 2048)) {
+    throw new ValidationError(
+      "Width must be between 512 and 2048",
+      "width",
+      template.width
+    );
+  }
+} catch (error) {
+  console.error(error.getReport());
+}
+```
+
+### Template Combination Error Handling
+
+```typescript
+try {
+  const combined = templateManager.combineTemplates(
+    templates.quality.extreme,
+    templates.style.cinematic,
+    templates.size.widescreen
+  );
+} catch (error) {
+  if (error instanceof ValidationError) {
+    console.error(
+      "Template combination failed:",
+      error.context.field,
+      error.context.value
+    );
+  } else {
+    console.error(ErrorHandler.createErrorReport(error));
   }
 }
 ```
 
 ## Best Practices
 
-1. **Template Selection**
-   - Use `draft` quality for rapid prototyping
-   - Use `balanced` quality for general use
-   - Use `quality` or `extreme` for final outputs
-   - Choose appropriate style templates for consistent aesthetics
-   - Select size templates based on intended use
+1. **Template Validation**
+   ```typescript
+   // Always validate templates before use
+   try {
+     const template = templateManager.getTemplate("quality.custom");
+     templateManager.validateTemplate(template);
+   } catch (error) {
+     // Handle validation errors appropriately
+     console.error(error.getReport());
+     // Use fallback template
+     template = templateManager.getTemplate("quality.balanced");
+   }
+   ```
 
 2. **Template Combination**
-   - Combine templates in a consistent order (quality → style → size)
-   - Be aware of parameter conflicts when combining templates
-   - Test template combinations for expected results
+   ```typescript
+   // Combine templates safely
+   const combined = ErrorHandler.withRetries(
+     () => templateManager.combineTemplates(
+       templates.quality.quality,
+       templates.style.cinematic,
+       templates.size.widescreen
+     ),
+     {
+       max_attempts: 2,
+       retry_if: (error) => error instanceof ValidationError
+     }
+   );
+   ```
 
 3. **Custom Templates**
-   - Base custom templates on existing ones for consistency
-   - Document custom template parameters
-   - Share common custom templates across your application
+   ```typescript
+   // Create and validate custom templates
+   try {
+     const customTemplate = {
+       ...templates.quality.quality,
+       guidance_scale: 8.5
+     };
+     templateManager.registerTemplate(
+       "quality.custom",
+       customTemplate,
+       true // validate on registration
+     );
+   } catch (error) {
+     console.error("Custom template validation failed:", error.getReport());
+   }
+   ```
 
-4. **Performance Considerations**
-   - Higher quality templates increase generation time
-   - Balance quality against performance requirements
-   - Consider caching template combinations
+4. **Error Recovery**
+   ```typescript
+   // Implement fallback strategy
+   async function getTemplateWithFallback(name: string) {
+     try {
+       return await templateManager.getTemplate(name);
+     } catch (error) {
+       if (error instanceof NotFoundError) {
+         console.warn(`Template ${name} not found, using fallback`);
+         return templateManager.getTemplate("quality.balanced");
+       }
+       throw error;
+     }
+   }
+   ```
 
-## Template Validation
+5. **Template Caching**
+   ```typescript
+   // Cache validated templates
+   const templateCache = new Map<string, Template>();
 
-The server includes validation for template parameters:
+   async function getValidatedTemplate(name: string) {
+     if (templateCache.has(name)) {
+       return templateCache.get(name);
+     }
+
+     const template = await templateManager.getTemplate(name);
+     if (templateManager.validateTemplate(template)) {
+       templateCache.set(name, template);
+     }
+     return template;
+   }
+   ```
+
+## Performance Considerations
+
+1. **Template Validation Caching**
+   - Cache validation results for frequently used templates
+   - Invalidate cache when templates are modified
+   - Use LRU caching for template combinations
+
+2. **Batch Validation**
+   ```typescript
+   // Validate multiple templates efficiently
+   async function validateTemplates(templates: Template[]) {
+     const results = await Promise.all(
+       templates.map(template =>
+         ErrorHandler.withRetries(
+           () => templateManager.validateTemplate(template)
+         )
+       )
+     );
+     return results.every(result => result);
+   }
+   ```
+
+3. **Optimized Template Combination**
+   ```typescript
+   // Combine templates efficiently
+   const combinedTemplate = templateManager.combineTemplates(
+     templates.quality.quality,
+     templates.style.cinematic,
+     templates.size.widescreen,
+     {
+       validate: false, // Skip intermediate validations
+       validateFinal: true // Only validate final result
+     }
+   );
+   ```
+
+## Template Monitoring
 
 ```typescript
-interface TemplateValidation {
-  validateQuality(template: QualityTemplate): boolean;
-  validateStyle(template: StyleTemplate): boolean;
-  validateSize(template: SizeTemplate): boolean;
+interface TemplateMetrics {
+  validationErrors: number;
+  combinationErrors: number;
+  cacheHits: number;
+  cacheMisses: number;
+  averageValidationTime: number;
 }
+
+// Track template usage and errors
+const metrics: TemplateMetrics = {
+  validationErrors: 0,
+  combinationErrors: 0,
+  cacheHits: 0,
+  cacheMisses: 0,
+  averageValidationTime: 0
+};
+
+// Monitor template operations
+templateManager.on("validation_error", (error) => {
+  metrics.validationErrors++;
+  console.error(error.getReport());
+});
 ```
-
-Use these validation methods to ensure template integrity:
-
-```typescript
-if (!templateValidation.validateQuality(customTemplate)) {
-  throw new Error("Invalid quality template parameters");
-}
-```
-
-## Error Handling
-
-Handle template-related errors appropriately:
-
-```typescript
-try {
-  const template = templateManager.getTemplate("quality.extreme");
-  if (!template) {
-    throw new Error("Template not found");
-  }
-  // Use template...
-} catch (error) {
-  console.error("Template error:", error.message);
-  // Use fallback template or default parameters
-}
