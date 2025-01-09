@@ -15,8 +15,8 @@
     "format": "biome format . --write"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^0.1.0",
-    "replicate": "^0.25.1"
+    "@modelcontextprotocol/sdk": "^0.6.0",
+    "replicate": "^1.0.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.5.3",
