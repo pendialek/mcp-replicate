@@ -38,6 +38,11 @@ import {
   handleListPredictions,
   handleGetModel,
 } from "./tools/handlers.js";
+import {
+  handleViewImage,
+  handleClearImageCache,
+  handleGetImageCacheStats,
+} from "./tools/image_viewer.js";
 
 // Initialize Replicate client
 const client = new ReplicateClient();
@@ -282,6 +287,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         owner: String(request.params.arguments?.owner),
         name: String(request.params.arguments?.name),
       });
+
+    case "view_image":
+      return handleViewImage(request);
+
+    case "clear_image_cache":
+      return handleClearImageCache(request);
+
+    case "get_image_cache_stats":
+      return handleGetImageCacheStats(request);
 
     default:
       throw new Error("Unknown tool");

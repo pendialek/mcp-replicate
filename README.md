@@ -17,6 +17,8 @@ A [Model Context Protocol](https://github.com/mcp-sdk/mcp) server implementation
   - Cancel running predictions
   - Get model version details
   - Access collections by slug
+  - View images in system browser
+  - Manage image cache with stats
 
 - **Prompts**
   - Get help selecting appropriate models
@@ -125,6 +127,21 @@ Cancels a running prediction.
 
 Parameters:
 - `prediction_id`: ID of the prediction to cancel
+
+### view_image
+
+Display an image in the system's default web browser.
+
+Parameters:
+- `url`: URL of the image to display
+
+### get_image_cache_stats
+
+Get statistics about the image cache including hits, misses, and size.
+
+### clear_image_cache
+
+Clear the image cache to free up memory.
 
 ## Prompts
 

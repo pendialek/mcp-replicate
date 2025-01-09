@@ -88,7 +88,7 @@ export function createPredictionStatusNotification(
         mimeType: "application/json",
         text: JSON.stringify(prediction),
       },
-      status: prediction.status,
+      status: prediction.status as PredictionStatus,
       previous_status: previousStatus,
       prediction,
     },

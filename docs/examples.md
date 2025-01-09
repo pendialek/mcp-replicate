@@ -203,6 +203,23 @@ subscription.on("error", (error) => {
 subscription.unsubscribe();
 ```
 
+### Image Viewer Integration
+
+```typescript
+// Display an image in the system browser
+await client.viewImage({
+  url: "https://example.com/image.png"
+});
+
+// Get cache statistics
+const stats = await client.getImageCacheStats();
+console.log("Cache hits:", stats.hits);
+console.log("Cache size:", stats.size);
+
+// Clear the image cache
+await client.clearImageCache();
+```
+
 ### Cache Control
 
 ```typescript

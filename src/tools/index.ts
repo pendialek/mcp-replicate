@@ -4,6 +4,7 @@
 
 export * from "./models.js";
 export * from "./predictions.js";
+export * from "./image_viewer.js";
 
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import {
@@ -19,6 +20,11 @@ import {
   getPredictionTool,
   listPredictionsTool,
 } from "./predictions.js";
+import {
+  viewImageTool,
+  clearImageCacheTool,
+  getImageCacheStatsTool,
+} from "./image_viewer.js";
 
 /**
  * All available tools.
@@ -33,4 +39,8 @@ export const tools: Tool[] = [
   getPredictionTool,
   listPredictionsTool,
   getModelTool,
+  // Image viewer tools
+  viewImageTool,
+  clearImageCacheTool,
+  getImageCacheStatsTool,
 ];

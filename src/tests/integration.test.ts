@@ -180,7 +180,12 @@ describe("Replicate API Integration", () => {
     // Mock webhook service
     vi.spyOn(webhookService, "queueWebhook").mockResolvedValue("test-webhook");
     vi.spyOn(webhookService, "getDeliveryResults").mockReturnValue([
-      { success: false, error: "Mock delivery failure" },
+      {
+        success: false,
+        error: "Mock delivery failure",
+        retryCount: 0,
+        timestamp: new Date().toISOString(),
+      },
     ]);
   });
 
