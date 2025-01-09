@@ -1,138 +1,94 @@
-# MCP Server for Replicate - Updated Implementation Plan
+# MCP Server for Replicate - Simplified Implementation Plan
+
+## Core Philosophy
+- Minimize complexity by focusing on tools over resources
+- Follow MCP spec for core functionality
+- Keep transport layer simple (stdio for local, SSE for remote)
+- Implement only essential features
 
 ## Current Status
 ✓ Basic functionality implemented:
-- Resource-oriented access to models, predictions, and collections
+- Tool-based access to models and predictions
 - Type-safe interactions with protocol compliance
-- Basic caching system
-- Error handling and retries
-- Rate limiting
+- Simple error handling
+- Basic rate limiting
 
 ## Implementation Plan
 
-### Phase 1: Real-time Updates (High Priority) ✓
-1. SSE Transport Layer ✓
-   - [x] Implement SSEServerTransport class extending BaseTransport
-   - [x] Add connection lifecycle (connect/disconnect) handling
-   - [x] Implement message serialization
-   - [x] Add keep-alive mechanism
-   - [x] Add reconnection handling with backoff
+### Phase 1: Core Simplification (High Priority) 🚧
+1. Replace Resource System with Tools
+   - [ ] Convert model listing to search_models tool
+   - [ ] Convert prediction access to get_prediction tool
+   - [ ] Remove resource-based URI schemes
+   - [ ] Simplify server initialization
 
-2. Subscription System ✓
-   - [x] Add subscription management to Server class
-   - [x] Implement resource subscription tracking
-   - [x] Add subscription cleanup on disconnect
-   - [x] Implement subscription-based updates
+2. Streamline Client Implementation
+   - [ ] Simplify ReplicateClient class
+   - [ ] Remove complex caching layers
+   - [ ] Implement basic error handling
+   - [ ] Add simple rate limiting
 
-3. Prediction Status Updates ✓
-   - [x] Add prediction status change detection
-   - [x] Implement status update notifications
-   - [x] Add progress tracking
-   - [x] Handle completion/failure events
+3. Transport Layer
+   - [ ] Keep stdio for local communication
+   - [ ] Implement basic SSE for remote (no complex retry logic)
+   - [ ] Remove unnecessary transport abstractions
 
-### Phase 2: Image Generation Enhancement (High Priority) ✓
-1. Specialized Prompts
-   - [x] Add text-to-image prompt with:
-     - Quality controls (draft/balanced/quality/extreme)
-     - Style controls
-     - Size/aspect ratio options
-   - [x] Add parameter suggestion improvements
-   - [x] Add progress tracking integration
+### Phase 2: Essential Tools (High Priority)
+1. Model Management
+   - [ ] search_models - Find models by query
+   - [ ] get_model - Get model details
+   - [ ] list_versions - List model versions
 
-2. Template System ✓
-   - [x] Create template directory structure
-   - [x] Add quality preset templates
-   - [x] Add style preset templates
-   - [x] Add size/aspect ratio templates
-   - [x] Implement template loading and validation
+2. Prediction Handling
+   - [ ] create_prediction - Run model inference
+   - [ ] get_prediction - Check prediction status
+   - [ ] cancel_prediction - Stop running prediction
 
-### Phase 3: Webhook Integration (Medium Priority) ✓
-1. Webhook System
-   - [x] Add webhook configuration validation
-   - [x] Implement webhook secret management
-   - [x] Add webhook event formatting
-   - [x] Implement retry logic for failed webhooks
+3. Image Tools
+   - [ ] view_image - Display result in browser
+   - [ ] save_image - Save to local filesystem
 
-2. Notification System ✓
-   - [x] Add notification queue
-   - [x] Implement batch processing
-   - [x] Add delivery tracking
-   - [x] Implement failure handling
+### Phase 3: Testing & Documentation (Medium Priority)
+1. Testing
+   - [ ] Add basic protocol compliance tests
+   - [ ] Test core tool functionality
+   - [ ] Add integration tests
 
-### Phase 4: Testing & Documentation (Medium Priority) ✓
-1. Testing Infrastructure ✓
-   - [x] Add protocol compliance tests
-   - [x] Add resource handling tests
-   - [x] Add SSE transport tests
-   - [x] Add webhook tests
-   - [x] Add integration tests
-   - [x] Add template validation tests
+2. Documentation
+   - [ ] Update API reference for simplified interface
+   - [ ] Add clear usage examples
+   - [ ] Create troubleshooting guide
 
-2. Documentation ✓
-   - [x] Add API reference
-   - [x] Add usage examples
-   - [x] Document template system
-   - [x] Add webhook integration guide
-   - [x] Document error handling
-   - [x] Add troubleshooting guide
+### Phase 4: Optional Enhancements (Low Priority)
+1. Webhook Support
+   - [ ] Simple webhook configuration
+   - [ ] Basic retry logic
+   - [ ] Event formatting
 
-
-
-### Phase 5: System Integration & Resource Management 🚧
-
-1. System Integration (High Priority)
-   - [x] Add system image viewer integration
-     - [x] Implement webbrowser module integration
-     - [x] Add image viewing tools
-     - [x] Handle different image formats
-   - [ ] Implement direct file system access
-     - [ ] Add local file caching
-     - [ ] Implement file management utilities
-     - [ ] Add cleanup mechanisms
-   - [ ] Add generation history browser
-     - [ ] Create history viewing interface
-     - [ ] Implement sorting and filtering
-     - [ ] Add metadata display
-
-2. Resource Management (Medium Priority)
-   - [ ] Enhance generation history
-     - [ ] Add search functionality
-     - [ ] Implement filtering options
-     - [ ] Add sorting capabilities
-   - [ ] Add resource tagging system
-     - [ ] Implement tag management
-     - [ ] Add tag-based search
-     - [ ] Create tag organization tools
-   - [ ] Improve resource collections
-     - [ ] Add custom collection support
-     - [ ] Implement collection sharing
-     - [ ] Add collection management tools
-
-3. Documentation Updates (Lower Priority)
-   - [ ] Add debugging guide to troubleshooting.md
-   - [ ] Update examples.md with new features
-   - [ ] Document resource management system
+2. Template System
+   - [ ] Basic parameter templates
+   - [ ] Simple validation
+   - [ ] Example presets
 
 ## Next Steps
 
-1. System Integration Implementation:
-   - Begin with system image viewer integration
-   - Add file system management
-   - Implement history browser
+1. Begin Core Simplification:
+   - Remove resource-based code
+   - Implement basic tools
+   - Simplify client implementation
 
-2. Resource Management Enhancement:
-   - Implement generation history features
-   - Add tagging system
-   - Create collection management tools
+2. Focus on Essential Tools:
+   - Build core model/prediction tools
+   - Add basic image handling
+   - Test functionality
 
-3. Documentation Updates:
-   - Document new features as they're implemented
-   - Create debugging guide
-   - Update examples with new capabilities
+3. Documentation:
+   - Document simplified architecture
+   - Update examples
+   - Create user guide
 
 Legend:
 - [x] Completed
-- [~] Partially implemented
 - [ ] Not started
 - ✓ Phase complete
 - 🚧 Phase in progress

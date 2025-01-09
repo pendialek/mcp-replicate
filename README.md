@@ -1,50 +1,46 @@
 # Replicate MCP Server
 
-A [Model Context Protocol](https://github.com/mcp-sdk/mcp) server implementation for [Replicate](https://replicate.com). This server provides access to Replicate's models and predictions through the MCP interface.
+A [Model Context Protocol](https://github.com/mcp-sdk/mcp) server implementation for [Replicate](https://replicate.com). This server provides access to Replicate's models and predictions through a simple tool-based interface.
 
 ## Features
 
-- **Resources**
-  - List and filter models by owner
-  - View model details including versions
-  - List recent predictions with status
-  - View prediction details and results
-  - Browse collections with slugs
+### Model Management
+- Search models by query
+- List models with optional owner filter
+- Get model details and versions
 
-- **Tools**
-  - Search models by query or owner
-  - Create predictions with string or object input
-  - Cancel running predictions
-  - Get model version details
-  - Access collections by slug
-  - View images in system browser
-  - Manage image cache with stats
+### Prediction Handling
+- Create predictions with string or object input
+- Check prediction status
+- Cancel running predictions
+- List recent predictions
 
-- **Prompts**
-  - Get help selecting appropriate models
-  - Get parameter suggestions for models
+### Image Tools
+- View images in system browser
+- Save images to local filesystem
 
 ## Examples
 
-### List Models by Owner
+### Search Models
 ```typescript
-const models = await client.listModels({ owner: "stability-ai" });
+const results = await client.callTool("search_models", {
+  query: "text to image models"
+});
 ```
 
-### Create Prediction with String Input
+### Create Prediction
 ```typescript
-const prediction = await client.createPrediction({
+const prediction = await client.callTool("create_prediction", {
   version: "model_version_id",
   input: "Your text prompt here" // Automatically wrapped in {text: string}
 });
 ```
 
-### Get Collection by Slug
+### Check Prediction Status
 ```typescript
-// Get collection slug from list_collections
-const collections = await client.listCollections();
-// Use slug to get details
-const collection = await client.getCollection("text-to-speech");
+const status = await client.callTool("get_prediction", {
+  prediction_id: "prediction_id"
+});
 ```
 
 ## Installation
@@ -103,70 +99,22 @@ npm run lint
 npm run format
 ```
 
-## Resource URIs
+## Available Tools
 
-The server uses custom URI schemes to identify resources:
+### Model Tools
+- `search_models`: Search for models using semantic search
+- `list_models`: List available models with optional filtering
+- `get_model`: Get details of a specific model including versions
 
-- Models: `replicate-model://{owner}/{name}`
-- Predictions: `replicate-prediction://{id}`
+### Prediction Tools
+- `create_prediction`: Create a new prediction using a model version
+- `cancel_prediction`: Cancel a running prediction
+- `get_prediction`: Get details about a specific prediction
+- `list_predictions`: List recent predictions
 
-## Tools
-
-### create_prediction
-
-Creates a new prediction using a model version.
-
-Parameters:
-- `version`: Model version ID
-- `input`: Model input parameters
-- `webhook_url` (optional): Webhook URL for notifications
-
-### cancel_prediction
-
-Cancels a running prediction.
-
-Parameters:
-- `prediction_id`: ID of the prediction to cancel
-
-### view_image
-
-Display an image in the system's default web browser.
-
-Parameters:
-- `url`: URL of the image to display
-
-### get_image_cache_stats
-
-Get statistics about the image cache including hits, misses, and size.
-
-### clear_image_cache
-
-Clear the image cache to free up memory.
-
-## Prompts
-
-### select_model
-
-Get help selecting an appropriate model for your use case. The prompt includes details about all available models to help with selection.
-
-### suggest_parameters
-
-Get suggestions for model parameters based on your requirements. Provide the model ID (owner/name) and describe what you want to achieve.
-
-## Error Handling
-
-The server includes robust error handling for:
-- Rate limiting
-- API errors
-- Invalid requests
-- Missing resources
-
-## Caching
-
-The server implements caching for models and predictions to reduce API calls. The cache is updated when:
-- Listing resources
-- Creating new predictions
-- Canceling predictions
+### Image Tools
+- `view_image`: Display an image in the system's default web browser
+- `save_image`: Save an image to the local filesystem
 
 ## Requirements
 
