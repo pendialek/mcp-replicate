@@ -22,6 +22,7 @@ import type { Prediction } from "../models/prediction.js";
 import { PredictionStatus } from "../models/prediction.js";
 import type { SchemaObject, PropertyObject } from "../models/openapi.js";
 import type { WebhookEvent } from "../models/webhook.js";
+import { createError } from "../services/error.js";
 
 // Mock environment variables
 process.env.REPLICATE_API_TOKEN = "test_token";
@@ -198,21 +199,14 @@ describe("Replicate API Integration", () => {
     it("should handle authentication errors", async () => {
       const invalidClient = new ReplicateClient("invalid_token");
       vi.spyOn(invalidClient, "listModels").mockRejectedValue(
-        new ReplicateError("Invalid API token", {
-          status: 401,
-          message: "Invalid API token",
-        })
+        createError.authentication()
       );
 
       await expect(invalidClient.listModels()).rejects.toThrow(ReplicateError);
     });
 
     it("should handle rate limit errors with retries", async () => {
-      const rateLimitError = new ReplicateError("Rate limit exceeded", {
-        retry_after: 1,
-        remaining_requests: 0,
-        reset_time: new Date(Date.now() + 1000).toISOString(),
-      });
+      const rateLimitError = createError.rateLimit(1);
 
       // Mock client to throw rate limit error once then succeed
       let attempts = 0;
@@ -227,8 +221,8 @@ describe("Replicate API Integration", () => {
       const result = await ErrorHandler.withRetries(
         async () => client.listModels(),
         {
-          max_attempts: 2,
-          retry_if: (error) => error instanceof ReplicateError,
+          maxAttempts: 2,
+          retryIf: (error: Error) => error instanceof ReplicateError,
         }
       );
 
@@ -237,10 +231,7 @@ describe("Replicate API Integration", () => {
     });
 
     it("should handle network errors with retries", async () => {
-      const networkError = new ReplicateError("Connection failed", {
-        url: "https://api.replicate.com/v1/models",
-        attempt: 1,
-      });
+      const networkError = createError.api(500, "Connection failed");
 
       // Mock client to throw network error twice then succeed
       let attempts = 0;
@@ -255,8 +246,8 @@ describe("Replicate API Integration", () => {
       const result = await ErrorHandler.withRetries(
         async () => client.listModels(),
         {
-          max_attempts: 3,
-          retry_if: (error) => error instanceof ReplicateError,
+          maxAttempts: 3,
+          retryIf: (error: Error) => error instanceof ReplicateError,
         }
       );
 
@@ -266,10 +257,7 @@ describe("Replicate API Integration", () => {
 
     it("should handle validation errors", async () => {
       vi.spyOn(client, "createPrediction").mockRejectedValue(
-        new ReplicateError("Invalid version", {
-          field: "version",
-          value: "invalid-version",
-        })
+        createError.validation("version", "Invalid version")
       );
 
       await expect(
@@ -281,20 +269,16 @@ describe("Replicate API Integration", () => {
     });
 
     it("should generate detailed error reports", async () => {
-      const error = new ReplicateError("Test error", {
-        field: "test",
-        value: 123,
-      });
+      const error = createError.validation("test", "Test error");
 
       const report = ErrorHandler.createErrorReport(error);
       expect(report).toMatchObject({
         name: "ReplicateError",
-        message: "Test error",
+        message: "Invalid input parameters",
         context: {
           field: "test",
-          value: 123,
+          message: "Test error",
         },
-        environment: expect.any(Object),
         timestamp: expect.any(String),
       });
     });
@@ -404,21 +388,28 @@ describe("Replicate API Integration", () => {
     beforeEach(async () => {
       // Get a test model for predictions
       const models = await client.listModels();
-      testModel = models.models.find(
+      const foundModel = models.models.find(
         (m) => m.owner === "stability-ai" && m.name === "sdxl"
-      )!;
+      );
+      if (!foundModel || !foundModel.latest_version) {
+        throw new Error("Test model not found or missing version");
+      }
+      testModel = foundModel;
       expect(testModel).toBeDefined();
     });
 
     it("should create prediction with community model version", async () => {
+      if (!testModel.latest_version) {
+        throw new Error("Test model missing version");
+      }
       const prediction = await client.createPrediction({
-        version: testModel.latest_version!.id,
+        version: testModel.latest_version.id,
         input: { prompt: "test" },
       });
 
       expect(prediction.id).toBeDefined();
       expect(prediction.status).toBe(PredictionStatus.Starting);
-      expect(prediction.version).toBe(testModel.latest_version!.id);
+      expect(prediction.version).toBe(testModel.latest_version.id);
     });
 
     it("should create prediction with official model", async () => {
@@ -432,6 +423,9 @@ describe("Replicate API Integration", () => {
     });
 
     it("should create and track prediction", async () => {
+      if (!testModel.latest_version) {
+        throw new Error("Test model missing version");
+      }
       const prompt = "a photo of a mountain landscape at sunset";
       const params = templateManager.generateParameters(prompt, {
         quality: "quality",
@@ -441,7 +435,7 @@ describe("Replicate API Integration", () => {
 
       // Create prediction
       const prediction = await client.createPrediction({
-        version: testModel.latest_version!.id,
+        version: testModel.latest_version.id,
         input: params as Record<string, unknown>,
       });
 
@@ -471,6 +465,9 @@ describe("Replicate API Integration", () => {
     });
 
     it("should handle webhook notifications", async () => {
+      if (!testModel.latest_version) {
+        throw new Error("Test model missing version");
+      }
       // Setup fake timers
       vi.useFakeTimers();
 
@@ -488,7 +485,7 @@ describe("Replicate API Integration", () => {
 
       // Create prediction with webhook
       const prediction = await client.createPrediction({
-        version: testModel.latest_version!.id,
+        version: testModel.latest_version.id,
         input: params as Record<string, unknown>,
         webhook: mockWebhook.url,
       });

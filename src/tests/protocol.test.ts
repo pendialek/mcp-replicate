@@ -19,6 +19,7 @@ import { ReplicateClient } from "../replicate_client.js";
 import { TemplateManager } from "../templates/manager.js";
 import { ErrorHandler, ReplicateError } from "../services/error.js";
 import { PredictionStatus } from "../models/prediction.js";
+import { createError } from "../services/error.js";
 
 // Set test environment
 process.env.NODE_ENV = "test";
@@ -105,11 +106,7 @@ describe("Protocol Compliance", () => {
 
   describe("Error Handling", () => {
     it("should handle rate limit errors with retries", async () => {
-      const rateLimitError = new ReplicateError("Rate limit exceeded", {
-        retry_after: 1,
-        remaining_requests: 0,
-        reset_time: new Date(Date.now() + 1000).toISOString(),
-      });
+      const rateLimitError = createError.rateLimit(1);
 
       // Mock client to throw rate limit error once then succeed
       let attempts = 0;
@@ -128,10 +125,10 @@ describe("Protocol Compliance", () => {
       const resultPromise = ErrorHandler.withRetries(
         async () => client.listModels(),
         {
-          max_attempts: 2,
-          retry_if: (error) => error instanceof ReplicateError,
-          min_delay: 100, // Use smaller delay for tests
-          max_delay: 200,
+          maxAttempts: 2,
+          minDelay: 100, // Use smaller delay for tests
+          maxDelay: 200,
+          retryIf: (error: Error) => error instanceof ReplicateError,
         }
       );
 
@@ -147,20 +144,16 @@ describe("Protocol Compliance", () => {
     });
 
     it("should generate detailed error reports", () => {
-      const error = new ReplicateError("Test error", {
-        field: "test",
-        value: 123,
-      });
+      const error = createError.validation("test", "Test error");
 
       const report = ErrorHandler.createErrorReport(error);
       expect(report).toMatchObject({
         name: "ReplicateError",
-        message: "Test error",
+        message: "Invalid input parameters",
         context: {
           field: "test",
-          value: 123,
+          message: "Test error",
         },
-        environment: expect.any(Object),
         timestamp: expect.any(String),
       });
     });
@@ -236,7 +229,10 @@ describe("Protocol Compliance", () => {
     });
 
     it("should handle webhook delivery with retries", async () => {
-      const deliverySpy = vi.spyOn(webhookService as any, "deliverWebhook");
+      const deliverySpy = vi.spyOn(
+        webhookService,
+        "deliverWebhook" as keyof WebhookService
+      );
       const fetchSpy = vi.spyOn(global, "fetch");
 
       // First call fails, second succeeds

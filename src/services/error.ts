@@ -1,329 +1,185 @@
 /**
- * Enhanced error handling system for Replicate API.
+ * Simple error handling system for Replicate API.
  */
 
-import type { PredictionStatus } from "../models/prediction.js";
+interface APIErrorResponse {
+  error?: string;
+  code?: string;
+  details?: Record<string, unknown>;
+}
 
 /**
- * Base class for Replicate API errors with enhanced context.
+ * Base class for all Replicate API errors.
  */
 export class ReplicateError extends Error {
   constructor(message: string, public context?: Record<string, unknown>) {
     super(message);
     this.name = "ReplicateError";
   }
+}
 
-  /**
-   * Get a detailed error report including context.
-   */
-  getReport(): string {
-    const report = [`Error: ${this.message}`];
-    if (this.context) {
-      report.push("Context:");
-      for (const [key, value] of Object.entries(this.context)) {
-        report.push(`  ${key}: ${JSON.stringify(value)}`);
-      }
-    }
-    if (this.stack) {
-      report.push("\nStack trace:", this.stack);
-    }
-    return report.join("\n");
-  }
+// Re-export specialized error types as ReplicateError instances
+export const createError = {
+  rateLimit: (retryAfter: number) =>
+    new ReplicateError("Rate limit exceeded", { retryAfter }),
+
+  authentication: (details?: string) =>
+    new ReplicateError("Authentication failed", { details }),
+
+  notFound: (resource: string) =>
+    new ReplicateError("Model not found", { resource }),
+
+  api: (status: number, message: string) =>
+    new ReplicateError("API error", { status, message }),
+
+  prediction: (id: string, message: string) =>
+    new ReplicateError("Prediction failed", { predictionId: id, message }),
+
+  validation: (field: string, message: string) =>
+    new ReplicateError("Invalid input parameters", { field, message }),
+
+  timeout: (operation: string, ms: number) =>
+    new ReplicateError("Operation timed out", { operation, timeoutMs: ms }),
+};
+
+interface RetryOptions {
+  maxAttempts?: number;
+  minDelay?: number;
+  maxDelay?: number;
+  backoffFactor?: number;
+  retryIf?: (error: Error) => boolean;
+  onRetry?: (error: Error, attempt: number) => void;
 }
 
 /**
- * Error thrown when rate limit is exceeded.
+ * Error handling utilities.
  */
-export class RateLimitExceeded extends ReplicateError {
-  constructor(
-    public retry_after: number,
-    public remaining_requests?: number,
-    public reset_time?: Date
-  ) {
-    super(`Rate limit exceeded. Retry after ${retry_after} seconds.`, {
-      retry_after,
-      remaining_requests,
-      reset_time: reset_time?.toISOString(),
-    });
-    this.name = "RateLimitExceeded";
-  }
-}
-
-/**
- * Error thrown when authentication fails.
- */
-export class AuthenticationError extends ReplicateError {
-  constructor(details?: string) {
-    super(`Invalid or missing API token${details ? `: ${details}` : ""}`, {
-      details,
-    });
-    this.name = "AuthenticationError";
-  }
-}
-
-/**
- * Error thrown when a resource is not found.
- */
-export class NotFoundError extends ReplicateError {
-  constructor(resource: string, details?: string) {
-    super(`Resource not found: ${resource}${details ? ` (${details})` : ""}`, {
-      resource,
-      details,
-    });
-    this.name = "NotFoundError";
-  }
-}
-
-/**
- * Error thrown when the API request fails.
- */
-export class APIError extends ReplicateError {
-  constructor(
-    public status: number,
-    public code: string,
-    message: string,
-    public response?: any
-  ) {
-    super(`API error (${status}): ${message}`, {
-      status,
-      code,
-      response,
-    });
-    this.name = "APIError";
-  }
-}
-
-/**
- * Error thrown when a prediction fails.
- */
-export class PredictionError extends ReplicateError {
-  constructor(
-    public prediction_id: string,
-    message: string,
-    public status: PredictionStatus,
-    public logs?: string
-  ) {
-    super(`Prediction ${prediction_id} failed: ${message}`, {
-      prediction_id,
-      status,
-      logs,
-    });
-    this.name = "PredictionError";
-  }
-}
-
-/**
- * Error thrown when a webhook delivery fails.
- */
-export class WebhookError extends ReplicateError {
-  constructor(
-    public webhook_url: string,
-    message: string,
-    public status_code?: number,
-    public response?: string
-  ) {
-    super(`Webhook delivery to ${webhook_url} failed: ${message}`, {
-      webhook_url,
-      status_code,
-      response,
-    });
-    this.name = "WebhookError";
-  }
-}
-
-/**
- * Error thrown when input validation fails.
- */
-export class ValidationError extends ReplicateError {
-  constructor(message: string, public field?: string, public value?: unknown) {
-    super(`Validation error${field ? ` for ${field}` : ""}: ${message}`, {
-      field,
-      value,
-    });
-    this.name = "ValidationError";
-  }
-}
-
-/**
- * Error thrown when a timeout occurs.
- */
-export class TimeoutError extends ReplicateError {
-  constructor(operation: string, public timeout_ms: number) {
-    super(`Operation "${operation}" timed out after ${timeout_ms}ms`, {
-      operation,
-      timeout_ms,
-    });
-    this.name = "TimeoutError";
-  }
-}
-
-/**
- * Enhanced error handling utilities.
- */
-export class ErrorHandler {
-  private static retryableStatusCodes = new Set([
-    408, // Request Timeout
-    429, // Too Many Requests
-    500, // Internal Server Error
-    502, // Bad Gateway
-    503, // Service Unavailable
-    504, // Gateway Timeout
-  ]);
-
+export const ErrorHandler = {
   /**
    * Check if an error should trigger a retry.
    */
-  static isRetryable(error: Error): boolean {
-    if (error instanceof RateLimitExceeded) {
-      return true;
-    }
-    if (error instanceof APIError) {
-      return this.retryableStatusCodes.has(error.status);
-    }
-    if (error instanceof TimeoutError) {
-      return true;
-    }
-    return false;
-  }
+  isRetryable(error: Error): boolean {
+    if (!(error instanceof ReplicateError)) return false;
+
+    const retryableMessages = [
+      "Rate limit exceeded",
+      "Internal server error",
+      "Gateway timeout",
+      "Service unavailable",
+    ];
+
+    return retryableMessages.some((msg) => error.message.includes(msg));
+  },
 
   /**
    * Calculate delay for exponential backoff.
    */
-  static getBackoffDelay(
+  getBackoffDelay(
     attempt: number,
-    options?: {
-      min_delay?: number;
-      max_delay?: number;
-      factor?: number;
-      jitter?: boolean;
-    }
+    {
+      minDelay = 1000,
+      maxDelay = 30000,
+      backoffFactor = 2,
+    }: Partial<RetryOptions> = {}
   ): number {
-    const {
-      min_delay = 1000,
-      max_delay = 30000,
-      factor = 2,
-      jitter = true,
-    } = options || {};
-
-    let delay = min_delay * Math.pow(factor, attempt);
-    if (jitter) {
-      delay += Math.random() * min_delay;
-    }
-    return Math.min(delay, max_delay);
-  }
+    const delay = minDelay * backoffFactor ** attempt;
+    return Math.min(delay, maxDelay);
+  },
 
   /**
    * Execute an operation with automatic retries.
    */
-  static async withRetries<T>(
+  async withRetries<T>(
     operation: () => Promise<T>,
-    options?: {
-      max_attempts?: number;
-      min_delay?: number;
-      max_delay?: number;
-      backoff_factor?: number;
-      jitter?: boolean;
-      retry_if?: (error: Error) => boolean;
-      on_retry?: (error: Error, attempt: number) => void;
-    }
+    optionsOrMaxAttempts: RetryOptions | number = {}
   ): Promise<T> {
-    const {
-      max_attempts = 3,
-      min_delay = 1000,
-      max_delay = 30000,
-      backoff_factor = 2,
-      jitter = true,
-      retry_if = this.isRetryable,
-      on_retry,
-    } = options || {};
+    const options: RetryOptions =
+      typeof optionsOrMaxAttempts === "number"
+        ? { maxAttempts: optionsOrMaxAttempts }
+        : optionsOrMaxAttempts;
 
-    let lastError: Error;
-    for (let attempt = 0; attempt < max_attempts; attempt++) {
+    const {
+      maxAttempts = 3,
+      minDelay = 1000,
+      maxDelay = 30000,
+      backoffFactor = 2,
+      retryIf = this.isRetryable,
+      onRetry,
+    } = options;
+
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         return await operation();
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
 
-        if (attempt === max_attempts - 1 || !retry_if(lastError)) {
+        if (attempt === maxAttempts - 1 || !retryIf(lastError)) {
           throw lastError;
         }
 
         const delay = this.getBackoffDelay(attempt, {
-          min_delay,
-          max_delay,
-          factor: backoff_factor,
-          jitter,
+          minDelay,
+          maxDelay,
+          backoffFactor,
         });
 
-        if (on_retry) {
-          on_retry(lastError, attempt);
+        if (onRetry) {
+          onRetry(lastError, attempt);
         }
 
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
 
-    throw lastError!;
-  }
+    throw lastError || new Error("Operation failed");
+  },
 
   /**
-   * Parse error details from API response.
+   * Parse error from API response.
    */
-  static parseAPIError(response: Response): APIError {
+  async parseAPIError(response: Response): Promise<ReplicateError> {
+    const status = response.status;
     let message = response.statusText;
-    let code = "unknown_error";
-    let details: any;
+    let context: Record<string, unknown> = { status };
 
     try {
       const contentType = response.headers.get("content-type");
       if (contentType?.includes("application/json")) {
-        details = response.json();
-        if (details.error) {
-          message = details.error;
-        }
-        if (details.code) {
-          code = details.code;
-        }
+        const details = (await response.json()) as APIErrorResponse;
+        message = details.error || message;
+        context = { ...context, ...details };
       }
     } catch {
       // Ignore JSON parsing errors
     }
 
-    return new APIError(response.status, code, message, details);
-  }
+    return new ReplicateError(message, context);
+  },
 
   /**
    * Create a detailed error report.
    */
-  static createErrorReport(error: Error): {
+  createErrorReport(error: Error): {
     name: string;
     message: string;
     context?: Record<string, unknown>;
-    environment: Record<string, unknown>;
     timestamp: string;
   } {
-    const timestamp = new Date().toISOString();
-    const environment = {
-      nodeVersion: process.version,
-      platform: process.platform,
-      arch: process.arch,
-    };
-
     if (error instanceof ReplicateError) {
       return {
         name: error.name,
         message: error.message,
         context: error.context,
-        environment,
-        timestamp,
+        timestamp: new Date().toISOString(),
       };
     }
 
     return {
       name: error.name || "Error",
       message: error.message,
-      environment,
-      timestamp,
+      timestamp: new Date().toISOString(),
     };
-  }
-}
+  },
+};

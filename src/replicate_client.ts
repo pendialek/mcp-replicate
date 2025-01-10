@@ -16,17 +16,7 @@ import {
   predictionCache,
   collectionCache,
 } from "./services/cache.js";
-import {
-  ReplicateError,
-  RateLimitExceeded,
-  AuthenticationError,
-  NotFoundError,
-  APIError,
-  PredictionError,
-  ValidationError,
-  TimeoutError,
-  ErrorHandler,
-} from "./services/error.js";
+import { ReplicateError, ErrorHandler, createError } from "./services/error.js";
 
 // Constants
 const REPLICATE_API_BASE = "https://api.replicate.com/v1";
@@ -140,15 +130,11 @@ export class ReplicateClient {
 
     // Handle rate limit exceeded
     if (response.status === 429) {
-      const retry_after = Number.parseInt(
+      const retryAfter = Number.parseInt(
         response.headers.get("Retry-After") || "60",
         10
       );
-      throw new RateLimitExceeded(
-        retry_after,
-        remaining ? Number.parseInt(remaining, 10) : undefined,
-        reset ? new Date(Number.parseInt(reset, 10) * 1000) : undefined
-      );
+      throw createError.rateLimit(retryAfter);
     }
   }
 
@@ -178,16 +164,16 @@ export class ReplicateClient {
         await this.handleResponse(response);
 
         if (!response.ok) {
-          throw ErrorHandler.parseAPIError(response);
+          throw await ErrorHandler.parseAPIError(response);
         }
 
         return response.json();
       },
       {
-        max_attempts: MAX_RETRIES,
-        min_delay: MIN_RETRY_DELAY,
-        max_delay: MAX_RETRY_DELAY,
-        on_retry: (error, attempt) => {
+        maxAttempts: MAX_RETRIES,
+        minDelay: MIN_RETRY_DELAY,
+        maxDelay: MAX_RETRY_DELAY,
+        onRetry: (error: Error, attempt: number) => {
           console.warn(
             `Request failed: ${error.message}. `,
             `Retrying (attempt ${attempt + 1}/${MAX_RETRIES})`
