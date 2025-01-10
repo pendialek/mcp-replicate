@@ -516,10 +516,10 @@ export class ReplicateClient {
     options: CreatePredictionOptions
   ): Promise<Prediction> {
     try {
-      // If input is a string, wrap it in an object with 'text' property
+      // If input is a string, wrap it in an object with 'prompt' property
       const input =
         typeof options.input === "string"
-          ? { text: options.input }
+          ? { prompt: options.input }
           : options.input;
 
       // Create prediction parameters with the correct type

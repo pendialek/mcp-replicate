@@ -235,9 +235,9 @@ export async function handleCreatePrediction(
   }
 ) {
   try {
-    // If input is a string, wrap it in an object with 'text' property
+    // If input is a string, wrap it in an object with 'prompt' property
     const input =
-      typeof args.input === "string" ? { text: args.input } : args.input;
+      typeof args.input === "string" ? { prompt: args.input } : args.input;
 
     const prediction = await client.createPrediction({
       ...args,
