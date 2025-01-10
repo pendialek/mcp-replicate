@@ -130,15 +130,15 @@ export class ImageViewer {
 
       // Create a temporary file to host the HTML
       const tempPath = `/tmp/mcp-image-viewer-${Date.now()}.html`;
-      const fs = await import("fs/promises");
+      const fs = await import("node:fs/promises");
       await fs.writeFile(tempPath, html);
 
       // Launch browser with the HTML file
       const fileUrl = `file://${tempPath}`;
 
       // Use the system's browser_action tool
-      const { exec } = await import("child_process");
-      const { promisify } = await import("util");
+      const { exec } = await import("node:child_process");
+      const { promisify } = await import("node:util");
       const execAsync = promisify(exec);
 
       // Open the file in the default browser

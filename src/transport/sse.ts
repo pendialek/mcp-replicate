@@ -21,8 +21,12 @@ interface EventSourceInit {
   withCredentials?: boolean;
 }
 
+interface Event {
+  type: string;
+}
+
 // Custom EventSource implementation for Node.js
-class EventSource extends EventEmitter {
+export class EventSource extends EventEmitter {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
   static readonly CLOSED = 2;
@@ -119,10 +123,6 @@ class EventSource extends EventEmitter {
   }
 }
 
-interface Event {
-  type: string;
-}
-
 const KEEP_ALIVE_INTERVAL = 30000; // 30 seconds
 const RECONNECT_TIMEOUT = 1000; // 1 second
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -144,6 +144,20 @@ export class SSEServerTransport extends BaseTransport {
     this.reconnectAttempts = new Map();
     this.subscriptions = new Map();
     this.isConnected = false;
+  }
+
+  // Add protected method for testing
+  protected getConnection(connectionId: string): EventSource | undefined {
+    return this.connections.get(connectionId);
+  }
+
+  protected getFirstConnectionId(): string | undefined {
+    return Array.from(this.connections.keys())[0];
+  }
+
+  // For testing purposes
+  protected emitEvent(event: string, data?: unknown): void {
+    this.emit(event, data);
   }
 
   /**
@@ -171,13 +185,14 @@ export class SSEServerTransport extends BaseTransport {
    * Disconnect from the SSE endpoint.
    */
   async disconnect(): Promise<void> {
+    // Prevent any reconnection attempts during cleanup
+    this.isConnected = false;
+
     // Clean up all connections
     const connectionIds = Array.from(this.connections.keys());
     for (const connectionId of connectionIds) {
       await this.cleanupConnection(connectionId);
     }
-    this.isConnected = false;
-    this.emit("disconnected");
   }
 
   /**
@@ -287,7 +302,7 @@ export class SSEServerTransport extends BaseTransport {
 
     // Wait before reconnecting with exponential backoff
     const attempts = this.reconnectAttempts.get(connectionId) || 0;
-    const delay = Math.min(1000 * Math.pow(2, attempts), 30000);
+    const delay = Math.min(1000 * 2 ** attempts, 30000);
     await new Promise((resolve) => setTimeout(resolve, delay));
 
     // Create new connection
@@ -302,9 +317,14 @@ export class SSEServerTransport extends BaseTransport {
   private async cleanupConnection(connectionId: string): Promise<void> {
     const connection = this.connections.get(connectionId);
     if (connection) {
+      // Remove all event handlers first
+      connection.onopen = null;
+      connection.onmessage = null;
+      connection.onerror = null;
       connection.close();
     }
 
+    // Clear intervals and remove from maps
     const interval = this.keepAliveIntervals.get(connectionId);
     if (interval) {
       clearInterval(interval);
@@ -315,8 +335,8 @@ export class SSEServerTransport extends BaseTransport {
     this.reconnectAttempts.delete(connectionId);
     this.subscriptions.delete(connectionId);
 
+    // Only emit disconnected when all connections are gone
     if (this.connections.size === 0) {
-      this.isConnected = false;
       this.emit("disconnected");
     }
   }

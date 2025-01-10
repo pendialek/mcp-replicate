@@ -2,6 +2,10 @@
  * Cache service implementation with TTL and LRU strategy.
  */
 
+import type { Collection, CollectionList } from "../models/collection.js";
+import type { Model, ModelList } from "../models/model.js";
+import type { Prediction } from "../models/prediction.js";
+
 interface CacheEntry<T> {
   value: T;
   timestamp: number;
@@ -21,7 +25,7 @@ export class Cache<T> {
   private ttl: number;
   private stats: CacheStats;
 
-  constructor(maxSize: number = 1000, ttlSeconds: number = 300) {
+  constructor(maxSize = 1000, ttlSeconds = 300) {
     this.cache = new Map();
     this.maxSize = maxSize;
     this.ttl = ttlSeconds * 1000; // Convert to milliseconds
@@ -106,7 +110,9 @@ export class Cache<T> {
    * Warm up the cache with initial data.
    */
   warmup(entries: [string, T][]): void {
-    entries.forEach(([key, value]) => this.set(key, value));
+    for (const [key, value] of entries) {
+      this.set(key, value);
+    }
   }
 
   /**
@@ -158,7 +164,7 @@ export class Cache<T> {
 
   private evictOldest(): void {
     let oldestKey: string | null = null;
-    let oldestAccess = Infinity;
+    let oldestAccess = Number.POSITIVE_INFINITY;
 
     // Find the least recently used entry
     for (const [key, entry] of this.cache.entries()) {
@@ -178,6 +184,6 @@ export class Cache<T> {
 }
 
 // Create specialized cache instances for different types
-export const modelCache = new Cache<any>(500, 3600); // 1 hour TTL for models
-export const predictionCache = new Cache<any>(1000, 60); // 1 minute TTL for predictions
-export const collectionCache = new Cache<any>(100, 3600); // 1 hour TTL for collections
+export const modelCache = new Cache<ModelList>(500, 3600); // 1 hour TTL for models
+export const predictionCache = new Cache<Prediction[]>(1000, 60); // 1 minute TTL for predictions
+export const collectionCache = new Cache<CollectionList>(100, 3600); // 1 hour TTL for collections

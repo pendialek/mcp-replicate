@@ -324,6 +324,7 @@ describe("Replicate API Integration", () => {
       expect(model2).toEqual(model1);
 
       // Advance time past TTL
+      vi.useFakeTimers();
       vi.advanceTimersByTime(25 * 60 * 60 * 1000); // 25 hours
 
       // Request should hit API again
@@ -403,10 +404,11 @@ describe("Replicate API Integration", () => {
     beforeEach(async () => {
       // Get a test model for predictions
       const models = await client.listModels();
-      testModel = models.models.find(
+      const foundModel = models.models.find(
         (m) => m.owner === "stability-ai" && m.name === "sdxl"
-      )!;
-      expect(testModel).toBeDefined();
+      );
+      expect(foundModel).toBeDefined();
+      testModel = foundModel as Model;
     });
 
     it("should create and track prediction", async () => {
@@ -417,9 +419,14 @@ describe("Replicate API Integration", () => {
         size: "landscape",
       });
 
+      expect(testModel.latest_version).toBeDefined();
+      if (!testModel.latest_version) {
+        throw new Error("Test model has no latest version");
+      }
+
       // Create prediction
       const prediction = await client.createPrediction({
-        version: testModel.latest_version!.id,
+        version: testModel.latest_version.id,
         input: params as Record<string, unknown>,
       });
 
@@ -461,36 +468,45 @@ describe("Replicate API Integration", () => {
         size: "landscape",
       });
 
+      expect(testModel.latest_version).toBeDefined();
+      if (!testModel.latest_version) {
+        throw new Error("Test model has no latest version");
+      }
+
+      // Mock fetch for webhook delivery
+      vi.spyOn(global, "fetch").mockRejectedValue(
+        new Error("Mock webhook failure")
+      );
+
       // Create mock webhook server
       const mockWebhook = {
         url: "https://example.com/webhook",
+        retries: 0, // Disable retries for test
       };
 
       // Create prediction with webhook
       const prediction = await client.createPrediction({
-        version: testModel.latest_version!.id,
+        version: testModel.latest_version.id,
         input: params as Record<string, unknown>,
         webhook: mockWebhook.url,
       });
 
       // Queue webhook delivery
-      const webhookId = await webhookService.queueWebhook(
-        { url: mockWebhook.url },
-        {
-          type: "prediction.created",
-          timestamp: new Date().toISOString(),
-          data: JSON.parse(JSON.stringify(prediction)),
-        } as WebhookEvent
-      );
+      const webhookId = await webhookService.queueWebhook(mockWebhook, {
+        type: "prediction.created",
+        timestamp: new Date().toISOString(),
+        data: JSON.parse(JSON.stringify(prediction)),
+      } as WebhookEvent);
 
-      // Wait for delivery attempt
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Use fake timers to advance time immediately
+      await vi.runAllTimersAsync();
 
       const results = webhookService.getDeliveryResults(webhookId);
       expect(results).toHaveLength(1);
       // Expect failure since we're using a mock URL
       expect(results[0].success).toBe(false);
-    });
+      expect(results[0].error).toBeDefined();
+    }, 10000); // Increase timeout just in case
   });
 
   describe("Collection Operations", () => {

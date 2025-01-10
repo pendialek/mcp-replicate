@@ -20,10 +20,26 @@ import { ReplicateClient } from "../replicate_client.js";
 import { TemplateManager } from "../templates/manager.js";
 import { ErrorHandler, ReplicateError } from "../services/error.js";
 import { PredictionStatus } from "../models/prediction.js";
+import { EventSource } from "../transport/sse.js";
 
 // Set test environment
 process.env.NODE_ENV = "test";
 process.env.REPLICATE_API_TOKEN = "test_token";
+
+// Add test transport class
+class TestSSETransport extends SSEServerTransport {
+  public emitTestEvent(event: string, data?: unknown): void {
+    this.emitEvent(event, data);
+  }
+
+  public getTestConnection(connectionId: string): EventSource | undefined {
+    return this.getConnection(connectionId);
+  }
+
+  public getTestFirstConnectionId(): string | undefined {
+    return this.getFirstConnectionId();
+  }
+}
 
 describe("Protocol Compliance", () => {
   let server: Server;
@@ -31,7 +47,7 @@ describe("Protocol Compliance", () => {
   let webhookService: WebhookService;
   let templateManager: TemplateManager;
   let transport: StdioServerTransport;
-  let sseTransport: SSEServerTransport;
+  let sseTransport: TestSSETransport;
 
   beforeAll(() => {
     // Enable fake timers
@@ -44,7 +60,7 @@ describe("Protocol Compliance", () => {
     webhookService = new WebhookService();
     templateManager = new TemplateManager();
     transport = new StdioServerTransport();
-    sseTransport = new SSEServerTransport();
+    sseTransport = new TestSSETransport();
 
     // Create server with test configuration
     server = new Server(
@@ -212,59 +228,37 @@ describe("Protocol Compliance", () => {
     });
   });
 
-  describe("Resource URIs", () => {
-    it("should use valid URI schemes", () => {
-      const modelUri = "replicate-model://owner/name";
-      const predictionUri = "replicate-prediction://host/123";
-      const collectionUri = "replicate-collection://host/slug";
-
-      expect(() => new URL(modelUri)).not.toThrow();
-      expect(() => new URL(predictionUri)).not.toThrow();
-      expect(() => new URL(collectionUri)).not.toThrow();
-    });
-
-    it("should parse URI components correctly", () => {
-      // Model URIs have owner in hostname and name in pathname
-      const modelUri = new URL("replicate-model://owner/name");
-      expect(modelUri.protocol).toBe("replicate-model:");
-      expect(modelUri.hostname).toBe("owner");
-      expect(modelUri.pathname).toBe("/name");
-
-      // Prediction URIs have ID in pathname
-      const predictionUri = new URL("replicate-prediction://host/123");
-      expect(predictionUri.protocol).toBe("replicate-prediction:");
-      expect(predictionUri.pathname).toBe("/123");
-
-      // Collection URIs have slug in pathname
-      const collectionUri = new URL("replicate-collection://host/slug");
-      expect(collectionUri.protocol).toBe("replicate-collection:");
-      expect(collectionUri.pathname).toBe("/slug");
-
-      // Test URIs without host
-      const predictionUriNoHost = new URL("replicate-prediction://123");
-      expect(predictionUriNoHost.protocol).toBe("replicate-prediction:");
-      expect(predictionUriNoHost.hostname).toBe("123");
-      expect(predictionUriNoHost.pathname).toBe("");
-
-      const collectionUriNoHost = new URL("replicate-collection://slug");
-      expect(collectionUriNoHost.protocol).toBe("replicate-collection:");
-      expect(collectionUriNoHost.hostname).toBe("slug");
-      expect(collectionUriNoHost.pathname).toBe("");
-    });
-  });
-
   describe("SSE Transport", () => {
     beforeEach(() => {
-      // Mock EventSource
+      // Mock EventSource with proper Response shape
       vi.spyOn(global, "fetch").mockImplementation(() => {
-        return Promise.resolve({
+        const response = {
           ok: true,
+          status: 200,
+          statusText: "OK",
+          headers: new Headers(),
+          redirected: false,
+          type: "basic" as const,
+          url: "http://localhost:3000/events",
           body: {
             getReader: () => ({
-              read: () => Promise.resolve({ done: true }),
+              read: () => Promise.resolve({ done: true, value: undefined }),
             }),
           },
-        } as any);
+          json: () => Promise.resolve({}),
+          text: () => Promise.resolve(""),
+          blob: () => Promise.resolve(new Blob()),
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+          formData: () => Promise.resolve(new FormData()),
+          clone: () => {
+            // Create a new object with the same properties
+            return Object.create(
+              Object.getPrototypeOf(response),
+              Object.getOwnPropertyDescriptors(response)
+            );
+          },
+        };
+        return Promise.resolve(response as Response);
       });
     });
 
@@ -274,31 +268,59 @@ describe("Protocol Compliance", () => {
 
     it("should establish SSE connection", async () => {
       const connectPromise = sseTransport.connect();
-      // Emit open event
-      (sseTransport as any).emit("open");
+      sseTransport.emitTestEvent("open");
       await connectPromise;
       expect(sseTransport).toHaveProperty("emit");
     });
 
     it("should handle connection lifecycle", async () => {
       let connected = false;
+      const connectionStates: boolean[] = [];
+
+      // Track all connection state changes
       sseTransport.on("connected", () => {
         connected = true;
+        connectionStates.push(true);
       });
 
       sseTransport.on("disconnected", () => {
         connected = false;
+        connectionStates.push(false);
       });
 
+      // Connect and wait for connection
       const connectPromise = sseTransport.connect();
-      // Emit open event
-      (sseTransport as any).emit("open");
+
+      // Get connection using test methods
+      const connectionId = sseTransport.getTestFirstConnectionId();
+      expect(connectionId).toBeDefined();
+
+      const connection = connectionId
+        ? sseTransport.getTestConnection(connectionId)
+        : undefined;
+      expect(connection).toBeDefined();
+
+      // Simulate successful connection
+      if (connection?.onopen) {
+        connection.onopen(new Event("open"));
+      }
+
       await connectPromise;
       expect(connected).toBe(true);
+      expect(connectionStates).toEqual([true]);
+
+      // Test disconnection
+      const disconnectPromise = new Promise<void>((resolve) => {
+        sseTransport.once("disconnected", () => resolve());
+      });
 
       await sseTransport.disconnect();
+      await disconnectPromise;
+
+      // Verify final state
+      expect(connectionStates).toEqual([true, false]);
       expect(connected).toBe(false);
-    });
+    }, 5000); // Reduced timeout since we don't need 10s anymore
 
     it("should deliver messages", async () => {
       const messages: unknown[] = [];
@@ -307,8 +329,7 @@ describe("Protocol Compliance", () => {
       });
 
       const connectPromise = sseTransport.connect();
-      // Emit open event
-      (sseTransport as any).emit("open");
+      sseTransport.emitTestEvent("open");
       await connectPromise;
 
       // Send a message
@@ -316,31 +337,30 @@ describe("Protocol Compliance", () => {
       await sseTransport.send(message);
 
       // Simulate receiving the message
-      (sseTransport as any).emit("message", message);
+      sseTransport.emitTestEvent("message", message);
 
       expect(messages).toHaveLength(1);
       expect(messages[0]).toMatchObject(message);
     });
 
     it("should handle reconnection with backoff", async () => {
-      // Create error object outside the mock
       const error = new Error("Connection failed");
 
       // Set up spies
-      const disconnectSpy = vi.spyOn(sseTransport as any, "disconnect");
+      const disconnectSpy = vi.spyOn(sseTransport, "disconnect");
       const setTimeoutSpy = vi.spyOn(global, "setTimeout");
       const connectSpy = vi
-        .spyOn(sseTransport as any, "connect")
+        .spyOn(sseTransport, "connect")
         .mockImplementationOnce(() => {
-          (sseTransport as any).emit("error", error);
+          sseTransport.emitTestEvent("error", error);
           return Promise.reject(error);
         })
         .mockImplementationOnce(() => {
-          (sseTransport as any).emit("error", error);
+          sseTransport.emitTestEvent("error", error);
           return Promise.reject(error);
         })
         .mockImplementationOnce(() => {
-          (sseTransport as any).emit("open");
+          sseTransport.emitTestEvent("open");
           return Promise.resolve();
         });
 
