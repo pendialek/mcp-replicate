@@ -120,152 +120,101 @@ app.post("/webhooks/replicate", async (req, res) => {
 });
 ```
 
-### Enhanced Error Handling
+### Error Handling
 
 ```typescript
 try {
   const prediction = await client.createPrediction({
-    version: "invalid-model@latest",
-    input: { prompt: "Test" }
+    version: "stability-ai/sdxl@latest",
+    input: { prompt: "Test prompt" }
   });
 } catch (error) {
-  if (error instanceof NotFoundError) {
-    console.error("Model not found:", error.context.resource);
-  } else if (error instanceof RateLimitExceeded) {
-    console.error(
-      `Rate limit exceeded. Try again in ${error.retry_after} seconds. `,
-      `Remaining requests: ${error.remaining_requests}, `,
-      `Reset time: ${error.reset_time}`
-    );
-  } else if (error instanceof ValidationError) {
-    console.error(
-      `Validation error for ${error.context.field}: `,
-      error.context.value
-    );
-  } else if (error instanceof PredictionError) {
-    console.error(
-      `Prediction ${error.context.prediction_id} failed: `,
-      error.context.logs
-    );
+  if (error instanceof ReplicateError) {
+    console.error(error.message);
+    // Optional: access additional context if available
+    if (error.context) {
+      console.error("Error context:", error.context);
+    }
   } else {
-    // Generate detailed error report
-    console.error(ErrorHandler.createErrorReport(error));
+    console.error("Unexpected error:", error);
   }
 }
 ```
 
-### Automatic Retries with Backoff
+### Automatic Retries
 
 ```typescript
-// Using built-in retry mechanism
-const prediction = await ErrorHandler.withRetries(
-  async () => {
-    return client.createPrediction({
-      version: "stability-ai/sdxl@latest",
-      input: { prompt: "Test prompt" }
-    });
-  },
+// Using the built-in retry functionality
+const result = await ErrorHandler.withRetries(
+  async () => client.createPrediction({
+    version: "stability-ai/sdxl@latest",
+    input: { prompt: "A test image" }
+  }),
   {
-    max_attempts: 3,
-    min_delay: 1000,
-    max_delay: 10000,
-    backoff_factor: 2,
-    jitter: true,
-    retry_if: (error) => error instanceof RateLimitExceeded,
-    on_retry: (error, attempt) => {
+    maxAttempts: 3,
+    minDelay: 1000,
+    maxDelay: 10000,
+    retryIf: (error) => error instanceof ReplicateError,
+    onRetry: (error, attempt) => {
       console.warn(
-        `Attempt ${attempt + 1} failed: ${error.message}. Retrying...`
+        `Request failed: ${error.message}. `,
+        `Retrying (attempt ${attempt + 1}/3)`
       );
     }
   }
 );
 ```
 
-### Real-time Updates with SSE
+### Handling Common Errors
 
 ```typescript
-// Subscribe to prediction updates
-const subscription = client.subscribe(`replicate-prediction://${prediction.id}`);
-
-subscription.on("update", (update) => {
-  console.log("Prediction status:", update.status);
-  if (update.output) {
-    console.log("Generated image URL:", update.output.image);
-  }
-});
-
-subscription.on("error", (error) => {
-  // Generate detailed error report
-  console.error(ErrorHandler.createErrorReport(error));
-});
-
-// Cleanup when done
-subscription.unsubscribe();
-```
-
-### Image Viewer Integration
-
-```typescript
-// Display an image in the system browser
-await client.viewImage({
-  url: "https://example.com/image.png"
-});
-
-// Get cache statistics
-const stats = await client.getImageCacheStats();
-console.log("Cache hits:", stats.hits);
-console.log("Cache size:", stats.size);
-
-// Clear the image cache
-await client.clearImageCache();
-```
-
-### Cache Control
-
-```typescript
-// Working with cached data
-async function getModelWithCache(owner: string, name: string) {
-  try {
-    // Attempt to get from cache first
-    const model = await client.getModel(owner, name);
-    console.log("Cache hit:", model.id);
-    return model;
-  } catch (error) {
-    if (error instanceof NotFoundError) {
-      console.warn("Cache miss, fetching from API");
-      // Handle cache miss
-      return refreshModel(owner, name);
+try {
+  const prediction = await client.createPrediction({
+    version: "stability-ai/sdxl@latest",
+    input: { prompt: "Test prompt" }
+  });
+} catch (error) {
+  if (error instanceof ReplicateError) {
+    switch (error.message) {
+      case "Rate limit exceeded":
+        const retryAfter = error.context?.retryAfter;
+        console.log(`Rate limit hit. Retry after ${retryAfter} seconds`);
+        break;
+      case "Authentication failed":
+        console.log("Please check your API token");
+        break;
+      case "Model not found":
+        console.log(`Model ${error.context?.resource} not found`);
+        break;
+      case "Invalid input parameters":
+        console.log(`Invalid input: ${error.context?.field} - ${error.context?.message}`);
+        break;
+      default:
+        console.log("Operation failed:", error.message);
     }
-    throw error;
   }
 }
+```
 
-// Batch processing with cache
+### Batch Processing
+
+```typescript
+// Batch processing example
 async function batchProcess(prompts: string[]) {
-  return await ErrorHandler.withRetries(
-    async () => {
-      const predictions = await Promise.all(
-        prompts.map(prompt =>
-          client.createPrediction({
-            version: "stability-ai/sdxl@latest",
-            input: { prompt }
-          })
-        )
-      );
+  const predictions = await Promise.all(
+    prompts.map(prompt =>
+      client.createPrediction({
+        version: "stability-ai/sdxl@latest",
+        input: { prompt }
+      })
+    )
+  );
 
-      // Monitor all predictions (uses cache for completed predictions)
-      return Promise.all(
-        predictions.map(prediction =>
-          client.getPredictionStatus(prediction.id)
-        )
-      );
-    },
-    {
-      max_attempts: 3,
-      on_retry: (error, attempt) => {
-        console.warn(`Batch processing attempt ${attempt + 1} failed:`, error);
-      }
-    }
+  // Monitor all predictions
+  return Promise.all(
+    predictions.map(prediction =>
+      client.getPredictionStatus(prediction.id)
+    )
   );
 }
 
@@ -281,93 +230,66 @@ const results = await batchProcess(prompts);
 
 ## Best Practices
 
-1. Always use proper error handling:
+1. Use proper error handling:
    ```typescript
    try {
      // Your code here
    } catch (error) {
      if (error instanceof ReplicateError) {
-       // Handle specific error types
-       console.error(error.getReport());
+       console.error(error.message);
      } else {
-       // Handle unexpected errors
-       console.error(ErrorHandler.createErrorReport(error));
+       console.error("Unexpected error:", error);
      }
    }
    ```
 
 2. Implement proper retry logic:
    ```typescript
-   const result = await ErrorHandler.withRetries(
-     async () => {
-       // Your API call here
+   let attempts = 0;
+   const maxAttempts = 3;
+   
+   while (attempts < maxAttempts) {
+     try {
+       const result = await makeRequest();
+       break;
+     } catch (error) {
+       attempts++;
+       if (attempts === maxAttempts) throw error;
+       await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
+     }
+   }
+   ```
+
+3. Use webhooks effectively:
+   ```typescript
+   // Create prediction with webhook notification
+   const prediction = await client.createPrediction({
+     version: "stability-ai/sdxl@latest",
+     input: {
+       prompt: "An abstract digital artwork"
      },
-     {
-       max_attempts: 3,
-       retry_if: (error) => ErrorHandler.isRetryable(error)
-     }
-   );
+     webhook_url: "https://api.myapp.com/webhooks/replicate"
+   });
    ```
 
-3. Use caching effectively:
-   - Let the client handle caching automatically
-   - Cache is invalidated appropriately for each resource type
-   - Completed predictions are cached indefinitely
-   - In-progress predictions are refreshed frequently
-
-4. Implement webhook security:
-   ```typescript
-   // Verify webhook signatures
-   const isValid = await verifyWebhook(
-     signature,
-     await client.getWebhookSecret(),
-     payload
-   );
-   ```
-
-5. Monitor prediction status:
-   ```typescript
-   // Use status-aware caching
-   const status = await client.getPredictionStatus(predictionId);
-   if (status.status === "completed") {
-     // Result is cached
-   } else {
-     // Status will be refreshed on next check
-   }
-   ```
-
-6. Handle rate limits gracefully:
+4. Handle rate limits gracefully:
    ```typescript
    try {
      await makeRequest();
    } catch (error) {
-     if (error instanceof RateLimitExceeded) {
-       const { retry_after, remaining_requests, reset_time } = error;
-       console.log(`Rate limit hit. Retry after ${retry_after}s`);
-       // Implement backoff strategy
+     if (error.message.includes("rate limit")) {
+       console.log("Rate limit hit. Please try again later.");
      }
    }
    ```
 
-7. Use proper error context:
+5. Clean up resources:
    ```typescript
    try {
+     // Use API
      await makeRequest();
    } catch (error) {
-     // Log detailed error information
-     console.error(error.getReport());
-     // Include stack trace and context
-     console.error(error.context);
-   }
-   ```
-
-8. Clean up resources:
-   ```typescript
-   const subscription = client.subscribe(resourceUri);
-   try {
-     // Use subscription
-   } finally {
-     // Always clean up
-     subscription.unsubscribe();
+     // Handle errors
+     console.error(error);
    }
    ```
