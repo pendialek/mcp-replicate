@@ -75,6 +75,13 @@ interface ReplicatePage<T> {
   total?: number;
 }
 
+interface CreatePredictionOptions {
+  version?: string;
+  model?: string;
+  input: ModelIO | string;
+  webhook?: string;
+}
+
 /**
  * Client for interacting with the Replicate API.
  */
@@ -519,24 +526,37 @@ export class ReplicateClient {
   /**
    * Create a new prediction.
    */
-  async createPrediction(options: {
-    version: string;
-    input: ModelIO | string;
-    webhook?: string;
-  }): Promise<Prediction> {
+  async createPrediction(
+    options: CreatePredictionOptions
+  ): Promise<Prediction> {
     try {
-      // Use the official client for predictions
       // If input is a string, wrap it in an object with 'text' property
       const input =
         typeof options.input === "string"
           ? { text: options.input }
           : options.input;
 
-      const prediction = (await this.client.predictions.create({
-        version: options.version,
-        input,
-        webhook: options.webhook,
-      })) as unknown as ReplicatePrediction;
+      // Create prediction parameters with the correct type
+      const predictionParams = options.version
+        ? {
+            version: options.version,
+            input,
+            webhook: options.webhook,
+          }
+        : {
+            model: options.model!,
+            input,
+            webhook: options.webhook,
+          };
+
+      if (!options.version && !options.model) {
+        throw new Error("Either model or version must be provided");
+      }
+
+      // Use the official client for predictions
+      const prediction = (await this.client.predictions.create(
+        predictionParams
+      )) as unknown as ReplicatePrediction;
 
       const result = {
         id: prediction.id,

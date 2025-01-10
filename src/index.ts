@@ -20,7 +20,6 @@ import type {
   PredictionStatus,
 } from "./models/prediction.js";
 import type { Collection } from "./models/collection.js";
-import { SSEServerTransport } from "./transport/sse.js";
 
 import { tools } from "./tools/index.js";
 import {
@@ -57,9 +56,6 @@ const cache = {
   predictionStatus,
 };
 
-// Initialize SSE transport
-const sseTransport = new SSEServerTransport();
-
 /**
  * Create an MCP server with capabilities for
  * tools (to run predictions)
@@ -71,13 +67,6 @@ const server = new Server(
   },
   {
     capabilities: {
-      resources: {
-        schemes: [
-          "replicate-model://",
-          "replicate-prediction://",
-          "replicate-collection://",
-        ],
-      },
       tools: {},
       prompts: {},
     },
@@ -118,24 +107,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
 
     case "create_prediction":
-      return handleCreatePrediction(client, cache, sseTransport, {
-        version: String(request.params.arguments?.version),
+      return handleCreatePrediction(client, cache, {
+        version: request.params.arguments?.version as string | undefined,
+        model: request.params.arguments?.model as string | undefined,
         input: request.params.arguments?.input as ModelIO,
         webhook: request.params.arguments?.webhook_url as string | undefined,
       });
 
     case "cancel_prediction":
-      return handleCancelPrediction(client, cache, sseTransport, {
+      return handleCancelPrediction(client, cache, {
         prediction_id: String(request.params.arguments?.prediction_id),
       });
 
     case "get_prediction":
-      return handleGetPrediction(client, cache, sseTransport, {
+      return handleGetPrediction(client, cache, {
         prediction_id: String(request.params.arguments?.prediction_id),
       });
 
     case "list_predictions":
-      return handleListPredictions(client, cache, sseTransport, {
+      return handleListPredictions(client, cache, {
         limit: request.params.arguments?.limit as number | undefined,
         cursor: request.params.arguments?.cursor as string | undefined,
       });

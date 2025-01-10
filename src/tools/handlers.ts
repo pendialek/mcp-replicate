@@ -7,12 +7,6 @@ import type { Model } from "../models/model.js";
 import type { ModelIO, Prediction } from "../models/prediction.js";
 import { PredictionStatus } from "../models/prediction.js";
 import type { Collection } from "../models/collection.js";
-import type { SSEServerTransport } from "../transport/sse.js";
-import {
-  createPredictionStatusNotification,
-  createPredictionErrorNotification,
-  createPredictionProgressNotification,
-} from "../models/notification.js";
 
 /**
  * Cache for models, predictions, and collections.
@@ -233,8 +227,12 @@ export async function handleGetCollection(
 export async function handleCreatePrediction(
   client: ReplicateClient,
   cache: Cache,
-  transport: SSEServerTransport,
-  args: { version: string; input: ModelIO | string; webhook?: string }
+  args: {
+    version: string | undefined;
+    model: string | undefined;
+    input: ModelIO | string;
+    webhook?: string;
+  }
 ) {
   try {
     // If input is a string, wrap it in an object with 'text' property
@@ -252,70 +250,6 @@ export async function handleCreatePrediction(
       prediction.id,
       prediction.status as PredictionStatus
     );
-
-    // Send initial status notification
-    await transport.notify(
-      createPredictionStatusNotification(prediction, PredictionStatus.Starting)
-    );
-
-    // Start polling for updates
-    const pollInterval = setInterval(async () => {
-      try {
-        const updatedPrediction = await client.getPredictionStatus(
-          prediction.id
-        );
-        const previousStatus = cache.predictionStatus.get(prediction.id);
-
-        // Update cache
-        cache.predictionCache.set(updatedPrediction.id, updatedPrediction);
-
-        // Check for status changes
-        if (previousStatus && updatedPrediction.status !== previousStatus) {
-          cache.predictionStatus.set(
-            updatedPrediction.id,
-            updatedPrediction.status as PredictionStatus
-          );
-          await transport.notify(
-            createPredictionStatusNotification(
-              updatedPrediction,
-              previousStatus
-            )
-          );
-
-          // Send progress notification if processing
-          if (updatedPrediction.status === PredictionStatus.Processing) {
-            const progress = estimateProgress(updatedPrediction);
-            await transport.notify(
-              createPredictionProgressNotification(updatedPrediction, progress)
-            );
-          }
-
-          // Stop polling if in terminal state
-          if (
-            updatedPrediction.status === PredictionStatus.Succeeded ||
-            updatedPrediction.status === PredictionStatus.Failed ||
-            updatedPrediction.status === PredictionStatus.Canceled
-          ) {
-            clearInterval(pollInterval);
-
-            // Send error notification if failed
-            if (
-              updatedPrediction.status === PredictionStatus.Failed &&
-              updatedPrediction.error
-            ) {
-              await transport.notify(
-                createPredictionErrorNotification(
-                  updatedPrediction,
-                  updatedPrediction.error
-                )
-              );
-            }
-          }
-        }
-      } catch (error) {
-        console.error("Error polling prediction status:", error);
-      }
-    }, 1000); // Poll every second
 
     return {
       content: [
@@ -344,27 +278,16 @@ export async function handleCreatePrediction(
 export async function handleCancelPrediction(
   client: ReplicateClient,
   cache: Cache,
-  transport: SSEServerTransport,
   args: { prediction_id: string }
 ) {
   try {
     const prediction = await client.cancelPrediction(args.prediction_id);
-
-    const previousStatus = cache.predictionStatus.get(prediction.id);
-
     // Update cache
     cache.predictionCache.set(prediction.id, prediction);
     cache.predictionStatus.set(
       prediction.id,
       prediction.status as PredictionStatus
     );
-
-    // Send status notification
-    if (previousStatus) {
-      await transport.notify(
-        createPredictionStatusNotification(prediction, previousStatus)
-      );
-    }
 
     return {
       content: [
@@ -447,7 +370,6 @@ export async function handleGetModel(
 export async function handleGetPrediction(
   client: ReplicateClient,
   cache: Cache,
-  transport: SSEServerTransport,
   args: { prediction_id: string }
 ) {
   try {
@@ -461,20 +383,6 @@ export async function handleGetPrediction(
       prediction.id,
       prediction.status as PredictionStatus
     );
-
-    // Send status notification if changed
-    if (previousStatus && prediction.status !== previousStatus) {
-      await transport.notify(
-        createPredictionStatusNotification(prediction, previousStatus)
-      );
-
-      // Send error notification if failed
-      if (prediction.status === PredictionStatus.Failed && prediction.error) {
-        await transport.notify(
-          createPredictionErrorNotification(prediction, prediction.error)
-        );
-      }
-    }
 
     return {
       content: [
@@ -555,7 +463,6 @@ function estimateProgress(prediction: Prediction): number {
 export async function handleListPredictions(
   client: ReplicateClient,
   cache: Cache,
-  transport: SSEServerTransport,
   args: { limit?: number; cursor?: string }
 ) {
   try {
@@ -571,19 +478,6 @@ export async function handleListPredictions(
         prediction.id,
         prediction.status as PredictionStatus
       );
-
-      // Send notifications for status changes
-      if (previousStatus && prediction.status !== previousStatus) {
-        await transport.notify(
-          createPredictionStatusNotification(prediction, previousStatus)
-        );
-
-        if (prediction.status === PredictionStatus.Failed && prediction.error) {
-          await transport.notify(
-            createPredictionErrorNotification(prediction, prediction.error)
-          );
-        }
-      }
     }
 
     // Format predictions as text

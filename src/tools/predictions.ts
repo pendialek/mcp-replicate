@@ -11,13 +11,18 @@ import type { Prediction } from "../models/prediction.js";
  */
 export const createPredictionTool: Tool = {
   name: "create_prediction",
-  description: "Create a new prediction using a model version",
+  description:
+    "Create a new prediction using either a model version (for community models) or model name (for official models)",
   inputSchema: {
     type: "object",
     properties: {
       version: {
         type: "string",
-        description: "Model version ID to use",
+        description: "Model version ID to use (for community models)",
+      },
+      model: {
+        type: "string",
+        description: "Model name to use (for official models)",
       },
       input: {
         type: "object",
@@ -29,7 +34,10 @@ export const createPredictionTool: Tool = {
         description: "Optional webhook URL for notifications",
       },
     },
-    required: ["version", "input"],
+    oneOf: [
+      { required: ["version", "input"] },
+      { required: ["model", "input"] },
+    ],
   },
 };
 

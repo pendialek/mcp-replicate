@@ -20,9 +20,9 @@ export class ReplicateError extends Error {
     const report = [`Error: ${this.message}`];
     if (this.context) {
       report.push("Context:");
-      Object.entries(this.context).forEach(([key, value]) => {
+      for (const [key, value] of Object.entries(this.context)) {
         report.push(`  ${key}: ${JSON.stringify(value)}`);
-      });
+      }
     }
     if (this.stack) {
       report.push("\nStack trace:", this.stack);
