@@ -1,47 +1,23 @@
 # Replicate MCP Server
 
-A [Model Context Protocol](https://github.com/mcp-sdk/mcp) server implementation for [Replicate](https://replicate.com). This server provides access to Replicate's models and predictions through a simple tool-based interface.
+A [Model Context Protocol](https://github.com/mcp-sdk/mcp) server implementation for Replicate. Run Replicate models through a simple tool-based interface.
 
 ## Features
 
-### Model Management
-- Search models by query
-- List models with optional owner filter
-- Get model details and versions
+### Models
+- Search models using semantic search
+- Browse models and collections
+- Get detailed model information and versions
 
-### Prediction Handling
-- Create predictions with string or object input
-- Check prediction status
-- Cancel running predictions
-- List recent predictions
+### Predictions
+- Create predictions with text or structured input
+- Track prediction status
+- Cancel running predictions 
+- List your recent predictions
 
-### Image Tools
-- View images in system browser
-- Save images to local filesystem
-
-## Examples
-
-### Search Models
-```typescript
-const results = await client.callTool("search_models", {
-  query: "text to image models"
-});
-```
-
-### Create Prediction
-```typescript
-const prediction = await client.callTool("create_prediction", {
-  version: "model_version_id",
-  input: "Your text prompt here" // Automatically wrapped in {text: string}
-});
-```
-
-### Check Prediction Status
-```typescript
-const status = await client.callTool("get_prediction", {
-  prediction_id: "prediction_id"
-});
-```
+### Image Handling
+- View generated images in your browser
+- Manage image cache for better performance
 
 ## Installation
 
@@ -49,23 +25,17 @@ const status = await client.callTool("get_prediction", {
 npm install
 ```
 
-## Configuration
+## Configuration 
 
-The server requires a Replicate API token. You can set it in one of two ways:
+The server needs a Replicate API token to work. Set it as an environment variable:
 
-1. Environment variable:
 ```bash
 export REPLICATE_API_TOKEN=your_token_here
 ```
 
-2. Pass it directly when creating the client:
-```typescript
-const client = new ReplicateClient("your_token_here");
-```
-
 ## Usage
 
-1. Build the TypeScript code:
+1. Build the code:
 ```bash
 npm run build
 ```
@@ -75,7 +45,64 @@ npm run build
 npm start
 ```
 
-The server communicates via stdio using the MCP protocol. You can use any MCP client to interact with it.
+The server uses stdio to communicate via the MCP protocol. You'll need an MCP client to interact with it.
+
+## Available Tools
+
+### Model Tools
+- `search_models`: Find models using semantic search
+- `list_models`: Browse available models
+- `get_model`: Get details about a specific model
+- `list_collections`: Browse model collections
+- `get_collection`: Get details about a specific collection
+
+### Prediction Tools  
+- `create_prediction`: Run a model with your inputs
+- `get_prediction`: Check a prediction's status
+- `cancel_prediction`: Stop a running prediction
+- `list_predictions`: See your recent predictions
+
+### Image Tools
+- `view_image`: Open an image in your browser
+- `clear_image_cache`: Clean up cached images
+- `get_image_cache_stats`: Check cache usage
+
+## Examples
+
+Here are some examples using an MCP client:
+
+### Search Models
+```typescript
+// Find text-to-image models
+const results = await mcpClient.invoke("search_models", {
+  query: "text to image models"
+});
+```
+
+### Create a Prediction
+```typescript
+// Run a model
+const prediction = await mcpClient.invoke("create_prediction", {
+  version: "model_version_id",
+  input: {
+    prompt: "A friendly robot making pancakes"
+  }
+});
+```
+
+### Check Prediction Status
+```typescript
+// Get prediction results
+const status = await mcpClient.invoke("get_prediction", {
+  prediction_id: "prediction_id"
+});
+```
+
+### Browse Collections
+```typescript
+// List featured collections
+const collections = await mcpClient.invoke("list_collections", {});
+```
 
 ## Development
 
@@ -84,37 +111,20 @@ The server communicates via stdio using the MCP protocol. You can use any MCP cl
 npm install
 ```
 
-2. Start the development server (with auto-reload):
+2. Start development server (with auto-reload):
 ```bash
 npm run dev
 ```
 
-3. Lint the code:
+3. Check code style:
 ```bash
 npm run lint
 ```
 
-4. Format the code:
+4. Format code:
 ```bash
 npm run format
 ```
-
-## Available Tools
-
-### Model Tools
-- `search_models`: Search for models using semantic search
-- `list_models`: List available models with optional filtering
-- `get_model`: Get details of a specific model including versions
-
-### Prediction Tools
-- `create_prediction`: Create a new prediction using a model version
-- `cancel_prediction`: Cancel a running prediction
-- `get_prediction`: Get details about a specific prediction
-- `list_predictions`: List recent predictions
-
-### Image Tools
-- `view_image`: Display an image in the system's default web browser
-- `save_image`: Save an image to the local filesystem
 
 ## Requirements
 
