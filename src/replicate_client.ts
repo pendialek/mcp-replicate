@@ -719,12 +719,16 @@ export class ReplicateClient {
       const response = await this.makeRequest<ReplicateModel>(
         "GET",
         `/models/${owner}/${name}`
-      );
+      ).catch((error) => {
+        throw ErrorHandler.parseAPIError(error);
+      });
 
       // Get model versions
       const versionsResponse = await this.makeRequest<
         ReplicatePage<ModelVersion>
-      >("GET", `/models/${owner}/${name}/versions`);
+      >("GET", `/models/${owner}/${name}/versions`).catch((error) => {
+        throw ErrorHandler.parseAPIError(error);
+      });
 
       const model: Model = {
         id: `${response.owner}/${response.name}`,
@@ -763,6 +767,9 @@ export class ReplicateClient {
       });
       return model;
     } catch (error) {
+      if (error instanceof Promise) {
+        throw new ReplicateError("Failed to fetch model details");
+      }
       throw ErrorHandler.parseAPIError(error as Response);
     }
   }

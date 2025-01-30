@@ -25,6 +25,9 @@ function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
+  if (error instanceof Promise) {
+    return "An asynchronous error occurred. Please try again.";
+  }
   return String(error);
 }
 
