@@ -4,9 +4,8 @@ A [Model Context Protocol](https://github.com/mcp-sdk/mcp) server implementation
 
 ## Installation
 
-Install from npm:
 ```bash
-npm install mcp-replicate
+npm install -g mcp-replicate
 ```
 
 Or install from source:
@@ -44,7 +43,12 @@ export REPLICATE_API_TOKEN=your_token_here
 
 ## Usage
 
-Start the server:
+If installed globally:
+```bash
+mcp-replicate
+```
+
+Or run directly with npx:
 ```bash
 npx mcp-replicate
 ```

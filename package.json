@@ -1,12 +1,12 @@
 {
   "name": "mcp-replicate",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Run Replicate models through a simple MCP server interface",
   "type": "module",
   "main": "build/index.js",
   "types": "build/index.d.ts",
   "bin": {
-    "replicate-mcp": "build/cli.js"
+    "mcp-replicate": "build/index.js"
   },
   "files": [
     "build",
@@ -15,6 +15,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "postbuild": "chmod +x build/index.js",
     "start": "node build/index.js",
     "dev": "tsc -w",
     "test": "vitest",
