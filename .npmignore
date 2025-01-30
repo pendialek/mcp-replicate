@@ -1,0 +1,25 @@
+# Source
+src/
+tests/
+
+# Development configs
+.git/
+.github/
+.gitignore
+.npmrc
+tsconfig.json
+vitest.config.ts
+.biome.json
+
+# IDE
+.vscode/
+.idea/
+
+# Build artifacts
+coverage/
+*.log
+.DS_Store
+
+# Development files
+TODO.md
+CONTRIBUTING.md 

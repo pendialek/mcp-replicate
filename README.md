@@ -2,6 +2,21 @@
 
 A [Model Context Protocol](https://github.com/mcp-sdk/mcp) server implementation for Replicate. Run Replicate models through a simple tool-based interface.
 
+## Installation
+
+Install from npm:
+```bash
+npm install mcp-replicate
+```
+
+Or install from source:
+```bash
+git clone https://github.com/deepfates/mcp-replicate
+cd mcp-replicate
+npm install
+npm run build
+```
+
 ## Features
 
 ### Models
@@ -19,12 +34,6 @@ A [Model Context Protocol](https://github.com/mcp-sdk/mcp) server implementation
 - View generated images in your browser
 - Manage image cache for better performance
 
-## Installation
-
-```bash
-npm install
-```
-
 ## Configuration 
 
 The server needs a Replicate API token to work. Set it as an environment variable:
@@ -35,12 +44,12 @@ export REPLICATE_API_TOKEN=your_token_here
 
 ## Usage
 
-1. Build the code:
+Start the server:
 ```bash
-npm run build
+npx mcp-replicate
 ```
 
-2. Start the server:
+Or if installed from source:
 ```bash
 npm start
 ```
