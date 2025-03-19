@@ -1,5 +1,5 @@
 {
-  "name": "mcp-replicate",
+  "name": "@pendialek/mcp-replicate",
   "version": "0.1.2",
   "description": "Run Replicate models through a simple MCP server interface",
   "type": "module",
@@ -8,6 +8,7 @@
   "bin": {
     "mcp-replicate": "build/index.js"
   },
+  "preferGlobal": true,
   "files": [
     "build",
     "README.md",
