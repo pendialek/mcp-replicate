@@ -238,13 +238,15 @@ export async function handleCreatePrediction(
   }
 ) {
   try {
-    // If input is a string, wrap it in an object with 'prompt' property
-    const input =
-      typeof args.input === "string" ? { prompt: args.input } : args.input;
+    const input: ModelIO = typeof args.input === "string"
+      ? { prompt: args.input }
+      : args.input;
 
     const prediction = await client.createPrediction({
-      ...args,
+      version: args.version,
+      model: args.model,
       input,
+      webhook: args.webhook
     });
 
     // Cache the prediction and its initial status
