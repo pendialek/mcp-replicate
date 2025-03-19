@@ -24,8 +24,8 @@ cd mcp-replicate
 npm install
 npm run build
 
-# Create global symlink
-npm link
+# Create global symlink with sudo
+sudo npm link
 
 echo "Installation complete. You can now run 'mcp-replicate' with your REPLICATE_API_TOKEN."
 echo "Example: REPLICATE_API_TOKEN=your_token_here mcp-replicate"
