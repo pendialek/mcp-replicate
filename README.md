@@ -8,16 +8,21 @@ A [Model Context Protocol](https://github.com/mcp-sdk/mcp) server implementation
    - Go to [Replicate API tokens page](https://replicate.com/account/api-tokens)
    - Create a new token if you don't have one
    - Copy the token for the next step
-
-2. Run the server directly from GitHub (recommended for Linux/Debian):
+2. Install and run on Linux/Debian:
 
 ```bash
-# Run with npx
-REPLICATE_API_TOKEN=your_token_here npx https://github.com/pendialek/mcp-replicate.git
+# Download and run installation script
+curl -o- https://raw.githubusercontent.com/pendialek/mcp-replicate/main/install.sh | bash
 
-# Or install globally
-npm install -g https://github.com/pendialek/mcp-replicate.git
+# Run the server
 REPLICATE_API_TOKEN=your_token_here mcp-replicate
+```
+
+The installation script will:
+- Clone the repository
+- Install dependencies
+- Build the project
+- Create a global symlink
 ```
 
 3. Configure your MCP client (e.g., Claude Desktop, Cline, Cursor):
