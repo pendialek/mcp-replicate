@@ -4,21 +4,24 @@ A [Model Context Protocol](https://github.com/mcp-sdk/mcp) server implementation
 
 ## Quickstart
 
-1. Install the server:
-
-```bash
-npm install -g mcp-replicate
-```
-
-2. Get your Replicate API token:
+1. Get your Replicate API token:
    - Go to [Replicate API tokens page](https://replicate.com/account/api-tokens)
    - Create a new token if you don't have one
    - Copy the token for the next step
 
-3. Configure Claude Desktop:
-   - Open Claude Desktop Settings (<kbd>⌘</kbd><kbd>,</kbd>)
-   - Select the "Developer" section in the sidebar
-   - Click "Edit Config" to open the configuration file
+2. Run the server directly from GitHub (recommended for Linux/Debian):
+
+```bash
+# Run with npx
+REPLICATE_API_TOKEN=your_token_here npx https://github.com/pendialek/mcp-replicate.git
+
+# Or install globally
+npm install -g https://github.com/pendialek/mcp-replicate.git
+REPLICATE_API_TOKEN=your_token_here mcp-replicate
+```
+
+3. Configure your MCP client (e.g., Claude Desktop, Cline, Cursor):
+   - Open the client's settings
    - Add the following configuration, replacing `your_token_here` with your actual Replicate API token:
 
 ```json
@@ -34,26 +37,18 @@ npm install -g mcp-replicate
 }
 ```
 
-4. Start Claude Desktop. You should see a 🔨 hammer icon in the bottom right corner of new chat windows, indicating the tools are available.
-
-(You can also use any other MCP client, such as Cursor, Cline, or Continue.)
+4. Start your MCP client. You should see a 🔨 hammer icon indicating the tools are available.
 
 ## Alternative Installation Methods
 
 ### Install from source
 
 ```bash
-git clone https://github.com/deepfates/mcp-replicate
+git clone https://github.com/pendialek/mcp-replicate.git
 cd mcp-replicate
 npm install
 npm run build
 npm start
-```
-
-### Run with npx
-
-```bash
-npx mcp-replicate
 ```
 
 ## Features
@@ -79,9 +74,9 @@ The server needs a Replicate API token to work. You can get one at [Replicate](h
 
 There are two ways to provide the token:
 
-### 1. In Claude Desktop Config (Recommended)
+### 1. In MCP Client Config (Recommended)
 
-Add it to your Claude Desktop configuration as shown in the Quickstart section:
+Add it to your client configuration as shown in the Quickstart section:
 
 ```json
 {
@@ -98,7 +93,7 @@ Add it to your Claude Desktop configuration as shown in the Quickstart section:
 
 ### 2. As Environment Variable
 
-Alternatively, you can set it as an environment variable if you're using another MCP client:
+Alternatively, you can set it as an environment variable:
 
 ```bash
 export REPLICATE_API_TOKEN=your_token_here
@@ -128,9 +123,9 @@ export REPLICATE_API_TOKEN=your_token_here
 
 ### Server is running but tools aren't showing up
 
-1. Check that Claude Desktop is properly configured with the MCP server settings
+1. Check that your MCP client is properly configured with the server settings
 2. Ensure your Replicate API token is set correctly
-3. Try restarting both the server and Claude Desktop
+3. Try restarting both the server and the client
 4. Check the server logs for any error messages
 
 ### Tools are visible but not working
@@ -165,7 +160,6 @@ npm run format
 
 - Node.js >= 18.0.0
 - TypeScript >= 5.0.0
-- [Claude Desktop](https://claude.ai/download) for using the tools
 
 ## License
 
