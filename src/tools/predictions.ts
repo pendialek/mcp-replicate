@@ -27,6 +27,13 @@ export const createPredictionTool: Tool = {
       input: {
         type: "object",
         description: "Input parameters for the model",
+        properties: {
+          prompt: {
+            type: "string",
+            description: "Text description of the desired image (required for image generation models)",
+          }
+        },
+        required: ["prompt"],
         additionalProperties: true,
       },
       webhook_url: {
@@ -97,4 +104,4 @@ export const listPredictionsTool: Tool = {
       },
     },
   },
-}; 
+};
