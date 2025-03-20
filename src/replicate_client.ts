@@ -522,27 +522,27 @@ export class ReplicateClient {
           ? { prompt: options.input }
           : options.input;
 
-      // Create prediction parameters with the correct type
-      const predictionParams = options.version
-        ? {
-            version: options.version,
-            input,
-            webhook: options.webhook,
-          }
-        : {
-            model: options.model!,
-            input,
-            webhook: options.webhook,
-          };
+      // If model name is provided, get the latest version first
+      let version = options.version;
+      if (!version && options.model) {
+        const [owner, name] = options.model.split('/');
+        const model = await this.getModel(owner, name);
+        if (!model.latest_version?.id) {
+          throw new Error(`No version found for model ${options.model}`);
+        }
+        version = model.latest_version.id;
+      }
 
-      if (!options.version && !options.model) {
+      if (!version) {
         throw new Error("Either model or version must be provided");
       }
 
-      // Use the official client for predictions
-      const prediction = (await this.client.predictions.create(
-        predictionParams
-      )) as unknown as ReplicatePrediction;
+      // Create prediction with version
+      const prediction = (await this.client.predictions.create({
+        version,
+        input,
+        webhook: options.webhook,
+      })) as unknown as ReplicatePrediction;
 
       const result = {
         id: prediction.id,
